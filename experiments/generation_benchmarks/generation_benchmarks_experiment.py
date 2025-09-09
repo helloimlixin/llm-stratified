@@ -25,9 +25,10 @@ import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 from transformers import (
-    AutoTokenizer, AutoModel, GPT2Tokenizer, GPT2Model,
+    AutoTokenizer, AutoModel, GPT2Tokenizer, GPT2Model, GPT2LMHeadModel,
     TrainingArguments, Trainer, DataCollatorWithPadding,
 )
+import torch.distributed as dist
 from datasets import Dataset
 import warnings
 warnings.filterwarnings("ignore")
@@ -100,17 +101,18 @@ class GPTGenerativeWrapper(nn.Module):
         self.model_name = model_name
         self.stratified_type = stratified_type
         
-        # Load GPT-2 model and tokenizer
+        # Load GPT-2 LMHead model and tokenizer (pretrained head for sensible perplexity)
         print(f"🤖 Loading {model_name} for generation benchmarks...")
         self.tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-        self.base_model = GPT2Model.from_pretrained(model_name)
+        self.base_model = GPT2LMHeadModel.from_pretrained(model_name)
         self.hidden_size = self.base_model.config.hidden_size
-        
-        # Set pad token
+
+        # Set pad token to eos to avoid resizing; ensure model uses it consistently
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        
-        # Stratified component
+        self.base_model.config.pad_token_id = self.tokenizer.pad_token_id
+
+        # Stratified component (post-attention modulation on hidden states)
         if stratified_type == "attention":
             num_heads = max(1, self.hidden_size // 64)
             self.stratified_component = StratifiedAttention(self.hidden_size, num_heads, num_strata=3)
@@ -118,19 +120,23 @@ class GPTGenerativeWrapper(nn.Module):
             self.stratified_component = nn.Identity()
         else:
             raise ValueError(f"Stratified type {stratified_type} not implemented")
-        
-        # Language modeling head
-        vocab_size = self.tokenizer.vocab_size
-        self.lm_head = nn.Linear(self.hidden_size, vocab_size)
-        
-        # Initialize weights
-        nn.init.xavier_uniform_(self.lm_head.weight)
+
+        # Use pretrained LM head from GPT2LMHeadModel
+        self.lm_head = self.base_model.lm_head
         
     def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
         """Forward pass for language modeling"""
-        # Get base model outputs
-        outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, **kwargs)
-        hidden_states = outputs.last_hidden_state
+        # Ensure device consistency
+        device = next(self.parameters()).device
+        input_ids = input_ids.to(device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(device)
+
+        # Get base transformer hidden states
+        transformer_outputs = self.base_model.transformer(
+            input_ids=input_ids, attention_mask=attention_mask, **kwargs
+        )
+        hidden_states = transformer_outputs.last_hidden_state
         
         # Apply stratified processing
         if self.stratified_type == "none":
@@ -146,8 +152,11 @@ class GPTGenerativeWrapper(nn.Module):
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), 
-                                 shift_labels.view(-1), ignore_index=-100)
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100,
+            )
             return {"loss": loss, "logits": logits}
         else:
             return {"logits": logits}
@@ -158,45 +167,27 @@ class GPTGenerativeWrapper(nn.Module):
         with torch.no_grad():
             # Tokenize prompt
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-            input_ids = inputs["input_ids"]
-            
-            generated = input_ids.clone()
-            
-            for _ in range(max_length):
-                # Get logits for next token
-                outputs = self.forward(input_ids=generated)
-                next_token_logits = outputs["logits"][:, -1, :] / temperature
-                
-                # Apply top-k filtering
-                if top_k > 0:
-                    top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
-                    next_token_logits = torch.full_like(next_token_logits, float('-inf'))
-                    next_token_logits.scatter_(1, top_k_indices, top_k_logits)
-                
-                # Apply top-p (nucleus) filtering
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
-                    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
-                    next_token_logits[indices_to_remove] = float('-inf')
-                
-                # Sample next token
-                probs = F.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
-                
-                # Check for EOS
-                if next_token.item() == self.tokenizer.eos_token_id:
-                    break
-                
-                # Append to generated sequence
-                generated = torch.cat([generated, next_token], dim=-1)
-            
-            # Decode generated text
-            generated_text = self.tokenizer.decode(generated[0], skip_special_tokens=True)
-            return generated_text[len(prompt):].strip()
+            input_ids = inputs["input_ids"].to(next(self.parameters()).device)
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(next(self.parameters()).device)
+
+            gen_ids = self.base_model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                do_sample=True,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                max_new_tokens=max_length,
+                pad_token_id=self.tokenizer.pad_token_id,
+                eos_token_id=self.tokenizer.eos_token_id,
+            )
+            generated_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+            # Remove prompt prefix if present
+            if generated_text.startswith(prompt):
+                generated_text = generated_text[len(prompt):]
+            return generated_text.strip()
 
 class GenerationBenchmarks:
     """Comprehensive generation benchmarking suite"""
@@ -215,8 +206,9 @@ class GenerationBenchmarks:
             for text in texts:
                 inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
                 input_ids = inputs["input_ids"]
-                
-                outputs = self.model(input_ids=input_ids, labels=input_ids)
+                attention_mask = inputs.get("attention_mask")
+
+                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
                 loss = outputs["loss"]
                 
                 if torch.isfinite(loss):
@@ -394,6 +386,16 @@ def create_benchmark_datasets():
         "instructions": instructions
     }
 
+def _is_rank_zero():
+    try:
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank() == 0
+    except Exception:
+        pass
+    # Fallback to env vars used by accelerate
+    return os.environ.get("RANK", "0") in ("0", 0)
+
+
 def run_generation_benchmarks_experiment():
     """Run comprehensive generation benchmarks experiment"""
     print("🚀 Comprehensive Generation Benchmarks Experiment")
@@ -474,35 +476,37 @@ def run_generation_benchmarks_experiment():
                 "status": "error"
             }
     
-    # Save results
-    os.makedirs("./results/generation_benchmarks", exist_ok=True)
-    with open("./results/generation_benchmarks/results.json", "w") as f:
-        json.dump(results, f, indent=2)
+    # Save results from rank 0 only
+    if _is_rank_zero():
+        os.makedirs("./results/generation_benchmarks", exist_ok=True)
+        with open("./results/generation_benchmarks/results.json", "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
     
     # Generate comprehensive summary
     print("\n" + "=" * 80)
     print("📊 GENERATION BENCHMARKS SUMMARY")
     print("=" * 80)
     
-    for stratified_type, result in results.items():
-        if result["status"] == "success":
-            print(f"🤖 GPT-2 + {stratified_type}:")
-            print(f"   🔤 Perplexity: {result['perplexity']:.2f}")
-            print(f"   📖 Story Generation:")
-            print(f"      - Coherence: {result['story_generation']['avg_coherence']:.3f}")
-            print(f"      - Diversity (distinct-1): {result['story_generation']['diversity']['distinct_1']:.3f}")
-            print(f"      - Avg Length: {result['story_generation']['avg_length']:.1f} words")
-            print(f"   💬 Dialogue Generation:")
-            print(f"      - Appropriateness: {result['dialogue_generation']['avg_appropriateness']:.3f}")
-            print(f"      - Diversity (distinct-1): {result['dialogue_generation']['diversity']['distinct_1']:.3f}")
-            print(f"   📝 Instruction Following:")
-            print(f"      - Following Score: {result['instruction_following']['avg_following_score']:.3f}")
-            print(f"      - Avg Length: {result['instruction_following']['avg_length']:.1f} words")
-        else:
-            print(f"❌ GPT-2 + {stratified_type}: ERROR - {result['error']}")
-        print()
-    
-    print(f"✅ Detailed results saved to: ./results/generation_benchmarks/results.json")
+    if _is_rank_zero():
+        for stratified_type, result in results.items():
+            if result["status"] == "success":
+                print(f"🤖 GPT-2 + {stratified_type}:")
+                print(f"   🔤 Perplexity: {result['perplexity']:.2f}")
+                print(f"   📖 Story Generation:")
+                print(f"      - Coherence: {result['story_generation']['avg_coherence']:.3f}")
+                print(f"      - Diversity (distinct-1): {result['story_generation']['diversity']['distinct_1']:.3f}")
+                print(f"      - Avg Length: {result['story_generation']['avg_length']:.1f} words")
+                print(f"   💬 Dialogue Generation:")
+                print(f"      - Appropriateness: {result['dialogue_generation']['avg_appropriateness']:.3f}")
+                print(f"      - Diversity (distinct-1): {result['dialogue_generation']['diversity']['distinct_1']:.3f}")
+                print(f"   📝 Instruction Following:")
+                print(f"      - Following Score: {result['instruction_following']['avg_following_score']:.3f}")
+                print(f"      - Avg Length: {result['instruction_following']['avg_length']:.1f} words")
+            else:
+                print(f"❌ GPT-2 + {stratified_type}: ERROR - {result['error']}")
+            print()
+        
+        print(f"✅ Detailed results saved to: ./results/generation_benchmarks/results.json")
     return results
 
 if __name__ == "__main__":
