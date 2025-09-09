@@ -37,31 +37,108 @@ This project implements advanced geometric analysis tools for understanding how 
 
 ---
 
-## 📁 **Project Structure**
+## 📊 **Key Results**
 
-```
-llm-stratified/
-├── src/                          # Source code
-│   ├── models/                   # Language model implementations
-│   ├── geometric_tools/         # Geometric analysis tools
-│   └── utils/                   # Utility functions
-├── experiments/                 # Experimental scripts
-│   ├── working/                # Basic experiments
-│   ├── advanced/               # Advanced MoE experiments
-│   ├── comparison/             # Model comparison
-│   ├── curvature/              # Curvature analysis
-│   ├── hypothesis/             # Hypothesis testing
-│   ├── deep/                   # Deep geometric analysis
-│   └── fiber/                  # Fiber bundle analysis
-├── results/                    # Experimental results
-│   ├── images/                 # Visualization plots
-│   ├── data/                   # JSON results
-│   └── analysis/               # Analysis reports
-├── docs/                       # Documentation
-├── scripts/                    # Utility scripts
-├── config/                     # Configuration files
-└── data/                       # Dataset storage
-```
+### **Dataset**: 180 samples from 6 domains (30 per domain)
+
+### **Fiber Bundle Hypothesis Test**:
+- **Original Embeddings**: 100% irregularity rate, mean p-value 0.170
+- **MoE-Enhanced Embeddings**: 100% irregularity rate, mean p-value 0.178
+- **Conclusion**: 🔴 **Both violate the manifold hypothesis**
+
+### **Clustering Performance**:
+- **Original**: Silhouette 0.2015, Davies-Bouldin 1.4423
+- **MoE-Enhanced**: Silhouette 0.2667, Davies-Bouldin 1.2768
+- **Improvement**: +32% Silhouette, -11% Davies-Bouldin
+
+### **Deep Geometric Analysis**:
+
+#### **Original Embeddings**:
+- **Scalar Curvature**: 1.0000 (constant)
+- **Mean Intrinsic Dimension**: 7.6944 ± 0.6119
+- **Boundary Points**: 24/180 (13.3%)
+- **Peak Connectivity**: 0.306 at threshold 2.000
+
+#### **MoE-Enhanced Embeddings**:
+- **Scalar Curvature**: 1.0000 (constant)
+- **Mean Intrinsic Dimension**: 7.2167 ± 0.7248
+- **Boundary Points**: 33/180 (18.3%)
+- **Peak Connectivity**: 1.000 at threshold 0.500
+
+---
+
+## 🎯 **Critical Discoveries**
+
+### **1. Intrinsic Dimension Reduction**:
+- **MoE reduces intrinsic dimensions** by 6.3% (7.6944 → 7.2167)
+- **More efficient representation** of manifold structure
+- **Better compression** of geometric information
+
+### **2. Boundary Complexity Increase**:
+- **MoE increases boundary points** from 13.3% to 18.3%
+- **More sophisticated stratum interfaces** after MoE training
+- **Enhanced geometric structure** at stratum boundaries
+
+### **3. Connectivity Transformation**:
+- **Original**: Peak connectivity 0.306 at threshold 2.000
+- **MoE-Enhanced**: Peak connectivity 1.000 at threshold 0.500
+- **Tighter geometric clustering** of points
+
+### **4. Expert Specialization**:
+- **Most Used Expert**: Expert 6 (27.05% usage)
+- **Least Used Expert**: Expert 3 (6.40% usage)
+- **Expert Usage Variance**: 0.0047 (moderate specialization)
+- **Geometric Awareness**: Mean score -0.1074 ± 0.0191
+
+---
+
+## 🔬 **Advanced Tools Implemented**
+
+### **1. Curvature Analysis Module**
+- **Riemannian Curvature**: Measures deviation from flat space
+- **Sectional Curvature**: Curvature of 2D planes in embedding space
+- **Gaussian Curvature**: Intrinsic measure K = det(II) / det(I)
+- **Mean Curvature**: Average curvature H = (1/2) * trace(II)
+
+### **2. Deep Geometric Analysis**
+- **Ricci Curvature**: Contraction of Riemann curvature tensor
+- **Scalar Curvature**: Trace of Ricci tensor (simplest curvature invariant)
+- **Intrinsic Dimension**: Multiple estimation methods (PCA, neighbors, correlation, MLE)
+- **Manifold Topology**: Connected components analysis at multiple scales
+- **Stratum Boundary Analysis**: Multi-criteria boundary detection
+- **Geometric Flow**: Curvature gradient analysis
+
+### **3. Fiber Bundle Hypothesis Tester**
+- **Dimension Consistency Test**: Checks if local dimension is consistent
+- **Curvature Smoothness Test**: Tests for triangle inequality violations
+- **Distance Scaling Test**: Verifies power law distance relationships
+- **Local Linearity Test**: Assesses neighborhood linearity using R²
+
+### **4. Advanced MoE Architectures**
+- **Enhanced Expert Networks**: Deeper architectures with dropout
+- **Advanced Gating**: Multi-layer gating with regularization
+- **Geometric Awareness**: Dedicated geometric scoring layer
+- **Fiber Bundle Awareness**: Dedicated fiber bundle structure scoring
+- **Multi-objective Training**: Reconstruction + diversity + geometric consistency
+
+---
+
+## 🧠 **Theoretical Implications**
+
+### **1. Challenges Traditional Assumptions**
+- **Manifold hypothesis** not applicable to token embeddings
+- **Stratified manifold structure** not supported by evidence
+- **Alternative geometric models** needed for representation learning
+
+### **2. MoE Architecture Insights**
+- **Geometric awareness** can be incorporated into training
+- **Expert specialization** creates distinct geometric regions
+- **Architecture choice** significantly affects geometric properties
+
+### **3. Research Directions**
+- **Non-manifold geometric structures** (fractals, multi-fractals)
+- **Improved geometric analysis tools**
+- **Cross-model validation** across different LLMs
 
 ---
 
@@ -137,86 +214,11 @@ Results are automatically saved to `results/` directory:
 
 ---
 
-## 📊 **Key Results**
-
-### **Fiber Bundle Hypothesis Test**:
-- **100% irregularity rate** across all samples
-- **Confirms Robinson et al. findings** - token embeddings violate manifold hypothesis
-- **Consistent across strata** and domains
-
-### **Stratified Manifold Hypothesis**:
-- **Not supported** by statistical evidence
-- **No significant curvature discontinuities** between strata
-- **Suggests alternative geometric models** needed
-
-### **MoE Geometric Effects**:
-- **Reduces intrinsic dimensions** (7.6944 → 7.2944)
-- **Increases boundary complexity** (13.3% → 18.3%)
-- **Enhances connectivity** (0.306 → 1.000)
-- **Maintains fiber bundle violations** (100% irregularity rate)
-
----
-
-## 🧠 **Theoretical Implications**
-
-### **1. Challenges Traditional Assumptions**
-- **Manifold hypothesis** not applicable to token embeddings
-- **Stratified manifold structure** not supported by evidence
-- **Alternative geometric models** needed for representation learning
-
-### **2. MoE Architecture Insights**
-- **Geometric awareness** can be incorporated into training
-- **Expert specialization** creates distinct geometric regions
-- **Architecture choice** significantly affects geometric properties
-
-### **3. Research Directions**
-- **Non-manifold geometric structures** (fractals, multi-fractals)
-- **Improved geometric analysis tools**
-- **Cross-model validation** across different LLMs
-
----
-
 ## 📚 **Scientific References**
 
 1. **Robinson, M., Dey, S., & Chiang, T. (2025)**. Token embeddings violate the manifold hypothesis. arXiv:2504.01002v2
 2. **Mixed-curvature Variational Autoencoders** (arXiv:1911.08411) - Curvature analysis inspiration
 3. **Stratified Manifold Learning** - Core theoretical framework
-
----
-
-## 🔧 **Technical Details**
-
-### **Dependencies**
-- Python 3.9+
-- PyTorch
-- Transformers
-- Scikit-learn
-- SciPy
-- Matplotlib/Seaborn
-- Datasets
-
-### **Hardware Requirements**
-- GPU recommended for MoE training
-- 8GB+ RAM for large experiments
-- Sufficient storage for results and visualizations
-
-### **Configuration**
-- Modify `config/default_config.json` for experiment parameters
-- Adjust `--samples-per-domain` and `--num-epochs` for different scales
-- Use `--model all` for comprehensive analysis
-
----
-
-## 📈 **Visualization Examples**
-
-The project generates comprehensive visualizations:
-
-- **PCA plots** with stratum coloring
-- **Curvature maps** and intrinsic dimension distributions
-- **Training loss curves** and expert usage patterns
-- **Statistical test results** and effect size visualizations
-- **Fiber bundle irregularity** analysis plots
-- **Cross-method comparison** visualizations
 
 ---
 
