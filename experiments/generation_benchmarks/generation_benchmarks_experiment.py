@@ -31,6 +31,9 @@ from transformers import (
 import torch.distributed as dist
 from datasets import Dataset
 import warnings
+import re
+import math
+from collections import Counter
 warnings.filterwarnings("ignore")
 
 # Add project root to path
@@ -274,15 +277,80 @@ class GenerationBenchmarks:
             )
             generated_stories.append(story)
         
-        # Evaluate diversity and basic quality
+        # Evaluate diversity and improved heuristic coherence
         diversity_metrics = self.evaluate_diversity(generated_stories)
-        
-        # Simple coherence check (sentences should be reasonably connected)
+
+        def repeated_ngram_ratio(text: str, n: int = 2) -> float:
+            tokens = text.split()
+            if len(tokens) < n:
+                return 0.0
+            ngrams = [' '.join(tokens[i:i+n]) for i in range(len(tokens)-n+1)]
+            counts = Counter(ngrams)
+            repeated = sum(c-1 for c in counts.values() if c > 1)
+            total = max(1, len(ngrams))
+            return repeated / total
+
+        def js_divergence(p: Counter, q: Counter) -> float:
+            # Jensen-Shannon divergence between unigram distributions
+            vocab = set(p.keys()) | set(q.keys())
+            if not vocab:
+                return 0.0
+            p_total = sum(p.values()) or 1
+            q_total = sum(q.values()) or 1
+            m = {}
+            for w in vocab:
+                pw = p.get(w, 0) / p_total
+                qw = q.get(w, 0) / q_total
+                m[w] = 0.5 * (pw + qw)
+            def kl(a, b):
+                s = 0.0
+                for w in vocab:
+                    aw = a.get(w, 0) / p_total if a is p else a.get(w, 0) / q_total
+                    bw = b[w]
+                    if aw > 0 and bw > 0:
+                        s += aw * math.log(aw / bw)
+                return s
+            p_probs = {w: p.get(w, 0) / p_total for w in vocab}
+            q_probs = {w: q.get(w, 0) / q_total for w in vocab}
+            m_probs = m
+            def kl_probs(a_probs, b_probs):
+                s = 0.0
+                for w in vocab:
+                    aw = a_probs[w]
+                    bw = b_probs[w]
+                    if aw > 0 and bw > 0:
+                        s += aw * math.log(aw / bw)
+                return s
+            jsd = 0.5 * kl_probs(p_probs, m_probs) + 0.5 * kl_probs(q_probs, m_probs)
+            # Normalize to [0,1] approximately for typical texts
+            return min(1.0, max(0.0, jsd))
+
         coherence_scores = []
         for story in generated_stories:
-            sentences = story.split('.')
-            # Basic coherence: check if story has multiple sentences and reasonable length
-            coherence = min(1.0, len(sentences) / 3.0) * min(1.0, len(story.split()) / 50.0)
+            # Sentence segmentation and tokens
+            sentences = [s.strip() for s in re.split(r'[.!?]+', story) if s.strip()]
+            words = story.split()
+            num_sent = len(sentences)
+            num_words = len(words)
+
+            # Components: sentence count, length, repetition penalty, topic shift penalty
+            sent_factor = min(1.0, num_sent / 6.0)              # saturates at 6 sentences
+            length_factor = min(1.0, num_words / 120.0)         # saturates at 120 words
+            rep_penalty = 1.0 - repeated_ngram_ratio(story, n=2)  # more repetition -> lower factor
+
+            # Topic shift: compare unigram distributions between halves
+            if num_words >= 20:
+                mid = len(words) // 2
+                first = Counter(words[:mid])
+                second = Counter(words[mid:])
+                topic_shift = js_divergence(first, second)      # 0 similar, 1 very different
+                topic_factor = 1.0 - topic_shift
+            else:
+                topic_factor = 0.7
+
+            # Weighted combination to avoid saturation at 1.0
+            coherence = 0.35 * sent_factor + 0.35 * length_factor + 0.15 * rep_penalty + 0.15 * topic_factor
+            coherence = max(0.0, min(1.0, coherence))
             coherence_scores.append(coherence)
         
         return {
