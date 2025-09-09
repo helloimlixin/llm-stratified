@@ -41,7 +41,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 # Define stratified components locally (same as before)
 class StratifiedAttention(nn.Module):
-    """Stratified attention mechanism with safe residual initialization (identity by default)."""
+    """Stratified attention mechanism with safe residual init and learnable gate.
+
+    The residual magnitude is alpha * sigmoid(gate), where gate is learnable and
+    initialized to 0 so that sigmoid(gate)=0.5.
+    """
     def __init__(self, hidden_size, num_heads, num_strata=3, residual_alpha: float = 0.01):
         super().__init__()
         self.hidden_size = hidden_size
@@ -49,6 +53,7 @@ class StratifiedAttention(nn.Module):
         self.num_strata = num_strata
         self.head_dim = hidden_size // num_heads
         self.residual_alpha = residual_alpha
+        self.residual_gate = nn.Parameter(torch.tensor(0.0))
         
         self.q_proj = nn.Linear(hidden_size, hidden_size)
         self.k_proj = nn.Linear(hidden_size, hidden_size)
@@ -104,9 +109,10 @@ class StratifiedAttention(nn.Module):
         
         # Final projection and safe residual add
         delta = self.out_proj(enhanced_output)
-        output = hidden_states + self.residual_alpha * delta
+        gate = torch.sigmoid(self.residual_gate)
+        output = hidden_states + (self.residual_alpha * gate) * delta
         
-        return output, {"strata": len(stratum_outputs), "residual_alpha": self.residual_alpha}
+        return output, {"strata": len(stratum_outputs), "residual_alpha": self.residual_alpha, "gate": gate.item()}
 
 class GPTGenerativeWrapper(nn.Module):
     """GPT-2 wrapper optimized for generation tasks"""
@@ -130,7 +136,9 @@ class GPTGenerativeWrapper(nn.Module):
         # Stratified component (post-attention modulation on hidden states)
         if stratified_type == "attention":
             num_heads = max(1, self.hidden_size // 64)
-            self.stratified_component = StratifiedAttention(self.hidden_size, num_heads, num_strata=3)
+            residual_alpha = float(os.getenv("GEN_BENCH_ALPHA", "0.01"))
+            self.placement = os.getenv("GEN_BENCH_PLACEMENT", "post")  # 'post' or 'none' placeholder for future
+            self.stratified_component = StratifiedAttention(self.hidden_size, num_heads, num_strata=3, residual_alpha=residual_alpha)
         elif stratified_type == "none":
             self.stratified_component = nn.Identity()
         else:
