@@ -1,0 +1,134 @@
+{
+  "gpt-3.5-turbo": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  },
+  "gpt-4": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  },
+  "llama-2-7b": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  },
+  "llama-3-8b": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  },
+  "deepseek-coder-1.3b": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  },
+  "deepseek-coder-6.7b": {
+    "none": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "attention": {
+      "error": "__init__() missing 1 required positional argument: 'num_heads'",
+      "status": "error"
+    },
+    "routing": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "layers": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    },
+    "moe": {
+      "error": "'NoneType' object is not subscriptable",
+      "status": "error"
+    }
+  }
+}

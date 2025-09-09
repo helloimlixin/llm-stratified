@@ -158,6 +158,10 @@ datasets/
 # Logs
 logs/
 *.log
+lightning_logs/
+runs/
+checkpoints/
+ablation.out
 
 # Temporary files
 temp/
@@ -200,3 +204,8 @@ results/analysis/*.npz
 # Keep small example results for documentation
 !results/images/example_*.png
 !results/data/example_*.json
+
+# Trainer artifacts
+**/trainer_state.json
+**/checkpoint-*/
+**/eval_results_*.json

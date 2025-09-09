@@ -1,0 +1,14 @@
+{
+  "none": {
+    "train_loss": 0.6393071620886525,
+    "eval_loss": 0.0004452617431525141,
+    "eval_accuracy": 1.0,
+    "status": "success"
+  },
+  "attention": {
+    "train_loss": 0.4378289458234794,
+    "eval_loss": 0.0004077574994880706,
+    "eval_accuracy": 1.0,
+    "status": "success"
+  }
+}
