@@ -22,6 +22,28 @@ from experiments.curvature.curvature_enhanced_experiment import run_curvature_en
 from experiments.hypothesis.stratified_manifold_hypothesis_test import run_stratified_manifold_hypothesis_test
 from experiments.deep.deep_stratified_manifold_analysis import run_deep_stratified_manifold_analysis
 from experiments.fiber.comprehensive_fiber_bundle_analysis import run_comprehensive_fiber_bundle_analysis
+from experiments.robinson.simplified_robinson_analysis import run_robinson_comprehensive_analysis
+from experiments.wang.comprehensive_wang_analysis import run_comprehensive_wang_analysis
+from experiments.integrated.comprehensive_integration_analysis import run_comprehensive_multi_paper_analysis
+from experiments.real_model.real_model_integration_analysis import run_real_model_analysis
+from experiments.large_model.large_model_analysis import run_large_model_analysis
+from experiments.immediate_improvements.immediate_improvements_experiment import run_immediate_improvements_experiment
+from experiments.real_world_testing.real_world_testing_experiment import run_real_world_testing_experiment
+from experiments.very_light_regularization.very_light_regularization_experiment import run_very_light_regularization_experiment
+from experiments.ultra_minimal_regularization.ultra_minimal_regularization_experiment import run_ultra_minimal_regularization_experiment
+from experiments.comprehensive_benefit_testing.comprehensive_benefit_testing_experiment import run_comprehensive_benefit_testing_experiment
+from experiments.larger_models_regularization_scaling.larger_models_regularization_scaling_experiment import run_larger_models_regularization_scaling_experiment
+from experiments.ultra_large_models.ultra_large_models_experiment import run_ultra_large_models_experiment
+from experiments.properly_designed.properly_designed_experiment import run_properly_designed_experiment
+from experiments.real_world_application.real_world_application_experiment import run_real_world_application_experiment
+from experiments.hf_trainer_stratified.hf_trainer_stratified_experiment import run_hf_trainer_stratified_experiment
+from experiments.modern_sota_models.modern_sota_models_experiment import run_modern_sota_models_experiment
+from experiments.hf_trainer_modern_sota.hf_trainer_modern_sota_experiment import test_hf_trainer_modern_sota
+from experiments.llama3_hf_trainer.llama3_hf_trainer_experiment import run_llama3_hf_trainer_experiment
+from experiments.generation_benchmarks.generation_benchmarks_experiment import run_generation_benchmarks_experiment
+from experiments.comprehensive_generation_training.comprehensive_generation_training_experiment import run_comprehensive_generation_training
+from experiments.research_scale_generation.research_scale_generation_experiment import run_research_scale_generation_experiment
+from experiments.from_scratch_training.from_scratch_training_experiment import run_from_scratch_training_experiment
 
 
 def main():
@@ -33,7 +55,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["working", "advanced", "comparison", "curvature", "hypothesis", "deep", "fiber", "all"],
+        choices=["working", "advanced", "comparison", "curvature", "hypothesis", "deep", "fiber", "robinson", "wang", "integrated", "real_model", "large_model", "immediate_improvements", "real_world_testing", "very_light_regularization", "ultra_minimal_regularization", "comprehensive_benefit_testing", "larger_models_regularization_scaling", "ultra_large_models", "properly_designed", "real_world_application", "hf_trainer", "modern_sota", "hf_modern_sota", "llama3_hf", "gen_benchmarks", "comprehensive_gen", "research_scale", "from_scratch", "all"],
         default="working",
         help="Experiment type to run"
     )
@@ -114,7 +136,7 @@ def main():
     
     # Determine which experiments to run
     if args.model == "all":
-        experiments_to_run = ["working", "advanced", "comparison", "curvature", "hypothesis", "deep", "fiber"]
+        experiments_to_run = ["working", "advanced", "comparison", "curvature", "hypothesis", "deep", "fiber", "robinson", "wang", "integrated", "real_model", "large_model", "immediate_improvements", "real_world_testing", "very_light_regularization", "ultra_minimal_regularization", "comprehensive_benefit_testing", "larger_models_regularization_scaling", "ultra_large_models", "properly_designed", "real_world_application", "hf_trainer", "modern_sota", "hf_modern_sota", "llama3_hf", "gen_benchmarks", "comprehensive_gen", "research_scale", "from_scratch"]
     else:
         experiments_to_run = [args.model]
     
@@ -165,6 +187,50 @@ def main():
                     num_clusters=5,
                     num_epochs=config['num_epochs']
                 )
+            elif experiment_name == "robinson":
+                results = run_robinson_comprehensive_analysis()
+            elif experiment_name == "wang":
+                results = run_comprehensive_wang_analysis()
+            elif experiment_name == "integrated":
+                results = run_comprehensive_multi_paper_analysis()
+            elif experiment_name == "real_model":
+                results = run_real_model_analysis()
+            elif experiment_name == "large_model":
+                results = run_large_model_analysis()
+            elif experiment_name == "immediate_improvements":
+                results = run_immediate_improvements_experiment()
+            elif experiment_name == "real_world_testing":
+                results = run_real_world_testing_experiment()
+            elif experiment_name == "very_light_regularization":
+                results = run_very_light_regularization_experiment()
+            elif experiment_name == "ultra_minimal_regularization":
+                results = run_ultra_minimal_regularization_experiment()
+            elif experiment_name == "comprehensive_benefit_testing":
+                results = run_comprehensive_benefit_testing_experiment()
+            elif experiment_name == "larger_models_regularization_scaling":
+                results = run_larger_models_regularization_scaling_experiment()
+            elif experiment_name == "ultra_large_models":
+                results = run_ultra_large_models_experiment()
+            elif experiment_name == "properly_designed":
+                results = run_properly_designed_experiment()
+            elif experiment_name == "real_world_application":
+                results = run_real_world_application_experiment()
+            elif experiment_name == "hf_trainer":
+                results = run_hf_trainer_stratified_experiment()
+            elif experiment_name == "modern_sota":
+                results = run_modern_sota_models_experiment()
+            elif experiment_name == "hf_modern_sota":
+                results = test_hf_trainer_modern_sota()
+            elif experiment_name == "llama3_hf":
+                results = run_llama3_hf_trainer_experiment()
+            elif experiment_name == "gen_benchmarks":
+                results = run_generation_benchmarks_experiment()
+            elif experiment_name == "comprehensive_gen":
+                results = run_comprehensive_generation_training()
+            elif experiment_name == "research_scale":
+                results = run_research_scale_generation_experiment()
+            elif experiment_name == "from_scratch":
+                results = run_from_scratch_training_experiment()
             else:
                 print(f"Experiment {experiment_name} not implemented")
                 continue
