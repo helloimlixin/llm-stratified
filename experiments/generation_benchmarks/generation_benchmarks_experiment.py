@@ -220,12 +220,16 @@ class GPTGenerativeWrapper(nn.Module):
 
                 if top_p and top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    probs = F.softmax(sorted_logits, dim=-1)
-                    cumprobs = torch.cumsum(probs, dim=-1)
-                    mask = cumprobs > top_p
-                    mask[..., 1:] = mask[..., :-1].clone()
-                    mask[..., 0] = 0
-                    next_token_logits[sorted_indices[mask]] = float('-inf')
+                    sorted_probs = F.softmax(sorted_logits, dim=-1)
+                    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    # Shift right to keep at least one token
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    # Create mask in original index order
+                    indices_to_remove = torch.zeros_like(next_token_logits, dtype=torch.bool)
+                    indices_to_remove.scatter_(1, sorted_indices, sorted_indices_to_remove)
+                    next_token_logits = next_token_logits.masked_fill(indices_to_remove, float('-inf'))
 
                 probs = F.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
