@@ -1,0 +1,86 @@
+{
+  "experiment_settings": {
+    "samples_per_domain": 500,
+    "num_epochs": 10,
+    "learning_rate": 1e-3,
+    "margin": 1.0,
+    "batch_size": 16,
+    "max_length": 512
+  },
+  "model_settings": {
+    "roberta": {
+      "model_name": "roberta-base",
+      "embedding_dim": 768,
+      "reduced_dim": 64,
+      "code_dim": 32,
+      "query_dim": 128,
+      "num_experts": 7,
+      "projection_dim": 64,
+      "num_lista_layers": 5,
+      "sparsity_levels": [8, 12, 16, 20, 24, 28, 32],
+      "threshold": 0.5
+    },
+    "bert": {
+      "model_name": "bert-base-uncased",
+      "embedding_dim": 768,
+      "reduced_dim": 64,
+      "code_dim": 32,
+      "query_dim": 128,
+      "num_experts": 7,
+      "projection_dim": 64,
+      "num_lista_layers": 5,
+      "sparsity_levels": [8, 12, 16, 20, 24, 28, 32],
+      "threshold": 0.5
+    },
+    "gpt3": {
+      "model_name": "text-embedding-ada-002",
+      "embedding_dim": 1536,
+      "reduced_dim": 64,
+      "code_dim": 32,
+      "query_dim": 128,
+      "num_experts": 7,
+      "projection_dim": 64,
+      "num_lista_layers": 5,
+      "sparsity_levels": [8, 12, 16, 20, 24, 28, 32],
+      "threshold": 0.5
+    }
+  },
+  "clustering_settings": {
+    "n_clusters": 5,
+    "random_state": 42,
+    "variance_threshold": 0.75
+  },
+  "visualization_settings": {
+    "save_plots": true,
+    "plot_dpi": 300,
+    "figure_size": [10, 8],
+    "color_map": "tab10",
+    "alpha": 0.7,
+    "point_size": 30
+  },
+  "output_settings": {
+    "output_dir": "results",
+    "save_model": true,
+    "save_embeddings": true,
+    "save_plots": true,
+    "save_summary": true
+  },
+  "datasets": {
+    "domains": ["imdb", "rotten", "amazon", "sst2", "tweet", "ag_news"],
+    "text_fields": {
+      "imdb": "text",
+      "rotten": "text",
+      "amazon": "text",
+      "sst2": "sentence",
+      "tweet": "text",
+      "ag_news": "text"
+    }
+  },
+  "geometric_analysis": {
+    "n_neighbors": 15,
+    "n_eigenvectors": 50,
+    "reg_param": 1e-8,
+    "min_pts": 5,
+    "max_dim": 100
+  }
+}
