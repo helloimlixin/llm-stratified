@@ -29,7 +29,7 @@ from transformers import (
     TrainingArguments, Trainer, DataCollatorWithPadding,
 )
 import torch.distributed as dist
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 import warnings
 import re
 import math
@@ -181,28 +181,63 @@ class GPTGenerativeWrapper(nn.Module):
         self.eval()
         with torch.no_grad():
             # Tokenize prompt
+            device = next(self.parameters()).device
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-            input_ids = inputs["input_ids"].to(next(self.parameters()).device)
+            generated = inputs["input_ids"].to(device)
             attention_mask = inputs.get("attention_mask")
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(next(self.parameters()).device)
+            if attention_mask is None:
+                attention_mask = torch.ones_like(generated)
+            attention_mask = attention_mask.to(device)
 
-            gen_ids = self.base_model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                do_sample=True,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                max_new_tokens=max_length,
-                pad_token_id=self.tokenizer.pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
-            generated_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-            # Remove prompt prefix if present
-            if generated_text.startswith(prompt):
-                generated_text = generated_text[len(prompt):]
-            return generated_text.strip()
+            # If no stratification, delegate to generate for speed
+            if self.stratified_type == "none":
+                gen_ids = self.base_model.generate(
+                    input_ids=generated,
+                    attention_mask=attention_mask,
+                    do_sample=True,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    max_new_tokens=max_length,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                )
+                out_text = self.tokenizer.decode(gen_ids[0], skip_special_tokens=True)
+                if out_text.startswith(prompt):
+                    out_text = out_text[len(prompt):]
+                return out_text.strip()
+
+            # Stratified decoding using our forward for logits
+            for _ in range(max_length):
+                outputs = self.forward(input_ids=generated, attention_mask=attention_mask)
+                next_token_logits = outputs["logits"][:, -1, :] / max(1e-6, temperature)
+
+                if top_k and top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
+                    filtered = torch.full_like(next_token_logits, float('-inf'))
+                    filtered.scatter_(1, top_k_indices, top_k_logits)
+                    next_token_logits = filtered
+
+                if top_p and top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                    probs = F.softmax(sorted_logits, dim=-1)
+                    cumprobs = torch.cumsum(probs, dim=-1)
+                    mask = cumprobs > top_p
+                    mask[..., 1:] = mask[..., :-1].clone()
+                    mask[..., 0] = 0
+                    next_token_logits[sorted_indices[mask]] = float('-inf')
+
+                probs = F.softmax(next_token_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                if next_token.item() == self.tokenizer.eos_token_id:
+                    break
+                generated = torch.cat([generated, next_token], dim=-1)
+                attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+
+            out_text = self.tokenizer.decode(generated[0], skip_special_tokens=True)
+            if out_text.startswith(prompt):
+                out_text = out_text[len(prompt):]
+            return out_text.strip()
 
 class GenerationBenchmarks:
     """Comprehensive generation benchmarking suite"""
@@ -235,6 +270,12 @@ class GenerationBenchmarks:
             perplexity = torch.exp(torch.tensor(avg_loss)).item()
             return perplexity
         return float('inf')
+
+    def evaluate_perplexity_wikitext(self, max_samples: int = 1000):
+        """Evaluate perplexity on WikiText-2 validation with proper masking."""
+        ds = load_dataset('wikitext', 'wikitext-2-raw-v1', split='validation')
+        texts = [t for t in ds['text'] if isinstance(t, str) and len(t.strip()) > 0][:max_samples]
+        return self.evaluate_perplexity(texts)
     
     def evaluate_diversity(self, generated_texts):
         """Evaluate n-gram diversity of generated texts"""
@@ -519,6 +560,29 @@ def _is_rank_zero():
     return os.environ.get("RANK", "0") in ("0", 0)
 
 
+def _parse_seeds_env() -> List[int]:
+    seeds_env = os.getenv("GEN_BENCH_SEEDS")
+    if seeds_env:
+        try:
+            seeds = [int(s.strip()) for s in seeds_env.split(',') if s.strip()]
+            if seeds:
+                return seeds
+        except Exception:
+            pass
+    num = int(os.getenv("GEN_BENCH_NUM_SEEDS", "1"))
+    base = int(os.getenv("GEN_BENCH_BASE_SEED", "42"))
+    return [base + i for i in range(num)]
+
+
+def _seed_everything(seed: int):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def run_generation_benchmarks_experiment():
     """Run comprehensive generation benchmarks experiment"""
     print("🚀 Comprehensive Generation Benchmarks Experiment")
@@ -536,70 +600,108 @@ def run_generation_benchmarks_experiment():
     # Test stratified types
     stratified_types = ["none", "attention"]
     results = {}
+    use_wikitext = os.getenv("GEN_BENCH_USE_WIKITEXT", "0") in ("1", "true", "True")
+    seeds = _parse_seeds_env()
     
     for stratified_type in stratified_types:
         print(f"\n🔍 Benchmarking {stratified_type} stratified type...")
         print("-" * 50)
-        
         try:
-            # Create model
-            model = GPTGenerativeWrapper(model_name="gpt2", stratified_type=stratified_type)
-            benchmarks = GenerationBenchmarks(model)
-            
-            print(f"🤖 Running benchmarks for GPT-2 + {stratified_type}...")
+            per_seed = []
+            for seed in seeds:
+                _seed_everything(seed)
 
-            # Brief finetune stratified params only (attention variant) to stabilize perplexity
-            if stratified_type == "attention":
-                finetune_steps = int(os.getenv("GEN_BENCH_FINETUNE_STEPS", "100"))
-                finetune_lr = float(os.getenv("GEN_BENCH_FINETUNE_LR", "5e-5"))
-                if _is_rank_zero():
-                    print(f"🛠️  Finetuning stratified parameters only ({finetune_steps} steps, lr={finetune_lr})...")
-                finetune_stratified_only(model, datasets["lm_texts"], steps=finetune_steps, lr=finetune_lr, batch_size=4, max_length=256)
-            
-            # 1. Language Modeling Perplexity
-            print("📊 Evaluating perplexity...")
-            perplexity = benchmarks.evaluate_perplexity(datasets["lm_texts"])
-            
-            # 2. Story Generation
-            print("📖 Evaluating story generation...")
-            story_results = benchmarks.evaluate_story_generation(datasets["story_prompts"])
-            
-            # 3. Dialogue Generation
-            print("💬 Evaluating dialogue generation...")
-            dialogue_results = benchmarks.evaluate_dialogue_generation(datasets["dialogue_contexts"])
-            
-            # 4. Instruction Following
-            print("📝 Evaluating instruction following...")
-            instruction_results = benchmarks.evaluate_instruction_following(datasets["instructions"])
-            
-            # Store comprehensive results
-            results[stratified_type] = {
-                "perplexity": perplexity,
+                # Create model per seed to avoid state carryover
+                model = GPTGenerativeWrapper(model_name="gpt2", stratified_type=stratified_type)
+                benchmarks = GenerationBenchmarks(model)
+
+                print(f"🤖 Running benchmarks for GPT-2 + {stratified_type} (seed={seed})...")
+
+                # Brief finetune stratified params only (attention variant) to stabilize perplexity
+                if stratified_type == "attention":
+                    finetune_steps = int(os.getenv("GEN_BENCH_FINETUNE_STEPS", "100"))
+                    finetune_lr = float(os.getenv("GEN_BENCH_FINETUNE_LR", "5e-5"))
+                    if _is_rank_zero():
+                        print(f"🛠️  Finetuning stratified parameters only ({finetune_steps} steps, lr={finetune_lr})...")
+                    finetune_stratified_only(model, datasets["lm_texts"], steps=finetune_steps, lr=finetune_lr, batch_size=4, max_length=256)
+
+                # 1. Language Modeling Perplexity
+                print("📊 Evaluating perplexity...")
+                if use_wikitext:
+                    perplexity = benchmarks.evaluate_perplexity_wikitext(max_samples=1000)
+                else:
+                    perplexity = benchmarks.evaluate_perplexity(datasets["lm_texts"]) 
+                
+                # 2. Story Generation
+                print("📖 Evaluating story generation...")
+                story_results = benchmarks.evaluate_story_generation(datasets["story_prompts"])
+                
+                # 3. Dialogue Generation
+                print("💬 Evaluating dialogue generation...")
+                dialogue_results = benchmarks.evaluate_dialogue_generation(datasets["dialogue_contexts"])
+                
+                # 4. Instruction Following
+                print("📝 Evaluating instruction following...")
+                instruction_results = benchmarks.evaluate_instruction_following(datasets["instructions"])
+
+                per_seed.append({
+                    "seed": seed,
+                    "perplexity": perplexity,
+                    "story_generation": {
+                        "diversity": story_results["diversity"],
+                        "avg_coherence": story_results["avg_coherence"],
+                        "avg_length": story_results["avg_story_length"],
+                    },
+                    "dialogue_generation": {
+                        "diversity": dialogue_results["diversity"],
+                        "avg_appropriateness": dialogue_results["avg_appropriateness"],
+                        "avg_length": dialogue_results["avg_response_length"],
+                    },
+                    "instruction_following": {
+                        "avg_following_score": instruction_results["avg_instruction_following"],
+                        "avg_length": instruction_results["avg_output_length"],
+                    },
+                })
+
+            # Aggregate across seeds (simple average)
+            def avg(vals):
+                return float(np.mean(vals)) if vals else 0.0
+
+            agg = {
+                "perplexity": avg([x["perplexity"] for x in per_seed]),
                 "story_generation": {
-                    "diversity": story_results["diversity"],
-                    "avg_coherence": story_results["avg_coherence"],
-                    "avg_length": story_results["avg_story_length"],
-                    "sample_stories": story_results["generated_stories"][:2]  # Save first 2 as examples
+                    "diversity": {
+                        "distinct_1": avg([x["story_generation"]["diversity"]["distinct_1"] for x in per_seed]),
+                        "distinct_2": avg([x["story_generation"]["diversity"]["distinct_2"] for x in per_seed]),
+                        "distinct_3": avg([x["story_generation"]["diversity"]["distinct_3"] for x in per_seed]),
+                    },
+                    "avg_coherence": avg([x["story_generation"]["avg_coherence"] for x in per_seed]),
+                    "avg_length": avg([x["story_generation"]["avg_length"] for x in per_seed]),
                 },
                 "dialogue_generation": {
-                    "diversity": dialogue_results["diversity"],
-                    "avg_appropriateness": dialogue_results["avg_appropriateness"],
-                    "avg_length": dialogue_results["avg_response_length"],
-                    "sample_responses": dialogue_results["generated_responses"][:2]
+                    "diversity": {
+                        "distinct_1": avg([x["dialogue_generation"]["diversity"]["distinct_1"] for x in per_seed]),
+                        "distinct_2": avg([x["dialogue_generation"]["diversity"]["distinct_2"] for x in per_seed]),
+                        "distinct_3": avg([x["dialogue_generation"]["diversity"]["distinct_3"] for x in per_seed]),
+                    },
+                    "avg_appropriateness": avg([x["dialogue_generation"]["avg_appropriateness"] for x in per_seed]),
+                    "avg_length": avg([x["dialogue_generation"]["avg_length"] for x in per_seed]),
                 },
                 "instruction_following": {
-                    "avg_following_score": instruction_results["avg_instruction_following"],
-                    "avg_length": instruction_results["avg_output_length"],
-                    "sample_outputs": instruction_results["generated_outputs"][:2]
+                    "avg_following_score": avg([x["instruction_following"]["avg_following_score"] for x in per_seed]),
+                    "avg_length": avg([x["instruction_following"]["avg_length"] for x in per_seed]),
                 },
-                "status": "success"
+                "seeds": per_seed,
+                "status": "success",
             }
-            
-            print(f"✅ {stratified_type}: Perplexity = {perplexity:.2f}")
-            print(f"   📖 Story Coherence = {story_results['avg_coherence']:.3f}")
-            print(f"   💬 Dialogue Appropriateness = {dialogue_results['avg_appropriateness']:.3f}")
-            print(f"   📝 Instruction Following = {instruction_results['avg_instruction_following']:.3f}")
-            
+
+            results[stratified_type] = agg
+
+            print(f"✅ {stratified_type}: Perplexity = {agg['perplexity']:.2f}")
+            print(f"   📖 Story Coherence = {agg['story_generation']['avg_coherence']:.3f}")
+            print(f"   💬 Dialogue Appropriateness = {agg['dialogue_generation']['avg_appropriateness']:.3f}")
+            print(f"   📝 Instruction Following = {agg['instruction_following']['avg_following_score']:.3f}")
+
         except Exception as e:
             print(f"❌ Error with {stratified_type}: {e}")
             results[stratified_type] = {
