@@ -482,9 +482,11 @@ def run_generation_benchmarks_experiment():
 
             # Brief finetune stratified params only (attention variant) to stabilize perplexity
             if stratified_type == "attention":
+                finetune_steps = int(os.getenv("GEN_BENCH_FINETUNE_STEPS", "100"))
+                finetune_lr = float(os.getenv("GEN_BENCH_FINETUNE_LR", "5e-5"))
                 if _is_rank_zero():
-                    print("🛠️  Briefly finetuning stratified parameters only (100 steps)...")
-                finetune_stratified_only(model, datasets["lm_texts"], steps=100, lr=5e-5, batch_size=4, max_length=256)
+                    print(f"🛠️  Finetuning stratified parameters only ({finetune_steps} steps, lr={finetune_lr})...")
+                finetune_stratified_only(model, datasets["lm_texts"], steps=finetune_steps, lr=finetune_lr, batch_size=4, max_length=256)
             
             # 1. Language Modeling Perplexity
             print("📊 Evaluating perplexity...")
