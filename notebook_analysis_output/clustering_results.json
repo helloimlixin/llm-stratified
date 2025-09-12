@@ -1,0 +1,20 @@
+{
+  "clustering_metrics": {
+    "silhouette_score": 0.15501374006271362,
+    "davies_bouldin_score": 1.4353285565707088,
+    "calinski_harabasz_score": 3.8011620793911707
+  },
+  "optimal_clusters": {
+    "silhouette": 3,
+    "davies_bouldin": 10,
+    "calinski_harabasz": 8,
+    "elbow": 4
+  },
+  "cluster_sizes": [
+    6,
+    4,
+    2,
+    3,
+    3
+  ]
+}

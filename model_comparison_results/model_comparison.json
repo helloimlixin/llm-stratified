@@ -1,0 +1,92 @@
+{
+  "models_compared": [
+    "bert-base",
+    "roberta-large",
+    "gpt2-large"
+  ],
+  "comparison_summary": {
+    "bert-base": {
+      "total_tokens": 1,
+      "total_rejections": 0,
+      "rejection_rate": 0.0,
+      "embedding_dim": 768,
+      "total_time": 1.2657496929168701
+    },
+    "roberta-large": {
+      "total_tokens": 1,
+      "total_rejections": 0,
+      "rejection_rate": 0.0,
+      "embedding_dim": 1024,
+      "total_time": 9.998883247375488
+    },
+    "gpt2-large": {
+      "total_tokens": 1,
+      "total_rejections": 0,
+      "rejection_rate": 0.0,
+      "embedding_dim": 1280,
+      "total_time": 27.082281351089478
+    }
+  },
+  "token_comparison": {
+    "data": {
+      "bert-base": {
+        "rejection_rate": 0.0,
+        "sample_count": 1,
+        "avg_base_dim": null,
+        "avg_fiber_dim": null
+      },
+      "roberta-large": {
+        "rejection_rate": 0.0,
+        "sample_count": 1,
+        "avg_base_dim": null,
+        "avg_fiber_dim": null
+      },
+      "gpt2-large": {
+        "rejection_rate": 0.0,
+        "sample_count": 1,
+        "avg_base_dim": null,
+        "avg_fiber_dim": null
+      }
+    }
+  },
+  "dimension_comparison": {
+    "bert-base": {
+      "base_dim_mean": 0,
+      "base_dim_std": 0,
+      "fiber_dim_mean": 0,
+      "fiber_dim_std": 0,
+      "samples_with_dimensions": 0
+    },
+    "roberta-large": {
+      "base_dim_mean": 0,
+      "base_dim_std": 0,
+      "fiber_dim_mean": 0,
+      "fiber_dim_std": 0,
+      "samples_with_dimensions": 0
+    },
+    "gpt2-large": {
+      "base_dim_mean": 0,
+      "base_dim_std": 0,
+      "fiber_dim_mean": 0,
+      "fiber_dim_std": 0,
+      "samples_with_dimensions": 0
+    }
+  },
+  "timing_comparison": {
+    "bert-base": {
+      "embedding_extraction": 1.0872290134429932,
+      "hypothesis_test": 0.1784369945526123,
+      "total_time": 1.2657496929168701
+    },
+    "roberta-large": {
+      "embedding_extraction": 9.8347327709198,
+      "hypothesis_test": 0.16408991813659668,
+      "total_time": 9.998883247375488
+    },
+    "gpt2-large": {
+      "embedding_extraction": 26.923089504241943,
+      "hypothesis_test": 0.15911340713500977,
+      "total_time": 27.082281351089478
+    }
+  }
+}

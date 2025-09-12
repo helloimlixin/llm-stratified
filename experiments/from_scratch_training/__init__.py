@@ -1,1 +1,0 @@
-# From Scratch Training Experiment

@@ -1,0 +1,29 @@
+# Default configuration for Fiber Bundle Hypothesis Test
+
+test_parameters:
+  r_min: 0.01                    # Minimum radius value
+  r_max: 20.0                    # Maximum radius value  
+  n_r: 200                       # Number of radius values to evaluate
+  alpha: 0.05                    # Significance level for statistical tests
+  window_size: 10                # Window size for slope change detection
+
+embedding_parameters:
+  model_name: 'bert-base-uncased' # Pre-trained model name
+  max_length: 512                 # Maximum sequence length
+  batch_size: 32                  # Batch size for processing
+
+visualization:
+  figsize: [12, 8]               # Default figure size
+  dpi: 300                       # Resolution for saved plots
+  style: 'seaborn-v0_8'          # Matplotlib style
+
+output:
+  save_embeddings: true          # Save computed embeddings
+  save_results: true             # Save test results
+  save_plots: true               # Save visualization plots
+  output_dir: './output'         # Output directory
+  plots_dir: './plots'           # Plots directory
+
+logging:
+  level: 'INFO'                  # Logging level (DEBUG, INFO, WARNING, ERROR)
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

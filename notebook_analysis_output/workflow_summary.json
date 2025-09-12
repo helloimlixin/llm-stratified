@@ -1,0 +1,21 @@
+{
+  "analysis_type": "Notebook Workflow Analysis",
+  "model": "roberta-base",
+  "total_samples": 18,
+  "domains": [
+    "rotten",
+    "ag_news",
+    "amazon",
+    "tweet",
+    "imdb",
+    "sst2"
+  ],
+  "embedding_dimension": 768,
+  "reduced_dimension": 17,
+  "n_clusters": 5,
+  "fiber_bundle_rejection_rate": 0.8888888888888888,
+  "clustering_silhouette": 0.15501374006271362,
+  "overall_intrinsic_dimension": 5,
+  "moe_trained": false,
+  "processing_time": 1757659112.9080532
+}

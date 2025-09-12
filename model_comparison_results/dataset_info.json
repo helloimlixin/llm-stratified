@@ -1,0 +1,28 @@
+{
+  "sentences_count": 1,
+  "target_tokens": [
+    "bank",
+    "river",
+    "code",
+    "model",
+    "system",
+    "network",
+    "process",
+    "function",
+    "data",
+    "information"
+  ],
+  "samples_per_token": 800,
+  "token_distribution": {
+    "bank": 0,
+    "river": 0,
+    "code": 0,
+    "model": 0,
+    "system": 0,
+    "network": 0,
+    "process": 0,
+    "function": 0,
+    "data": 1,
+    "information": 0
+  }
+}
