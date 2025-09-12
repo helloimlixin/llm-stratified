@@ -1,0 +1,26 @@
+{
+  "Encoder Models": {
+    "bert-base": {
+      "rejection_rate": 0.0,
+      "embedding_dim": 768,
+      "intrinsic_dim": "TBD"
+    },
+    "roberta-base": {
+      "rejection_rate": 0.0,
+      "embedding_dim": 768,
+      "intrinsic_dim": "TBD"
+    }
+  },
+  "Decoder Models": {
+    "gpt2": {
+      "rejection_rate": 0.0,
+      "embedding_dim": 768,
+      "intrinsic_dim": "TBD"
+    },
+    "llama-1b": {
+      "rejection_rate": 0.0,
+      "embedding_dim": 2048,
+      "intrinsic_dim": "TBD"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "model": "gpt2",
+  "total_samples": 1200,
+  "domains": [
+    "ag_news",
+    "tweet",
+    "amazon",
+    "rotten",
+    "sst2",
+    "imdb"
+  ],
+  "samples_per_domain": 200,
+  "rejection_rate": 0.02,
+  "analysis_time": 58.20170021057129,
+  "fast_mode": true
+}
