@@ -1,0 +1,642 @@
+#!/usr/bin/env python
+# coding: utf-8
+"""
+TinyViT training script (PyTorch-only) with dataset factory, CLI flags,
+warmup+cosine LR, label smoothing, optional torch.compile, and optional wandb.
+
+Supported datasets (torchvision):
+- CIFAR10, CIFAR100
+- STL10
+- Food101
+- Flowers102
+- SVHN
+- CelebA (multi-label, 40 attributes)
+
+Example:
+  python tinyvit_train.py --dataset FOOD101 --img-size 224 --patch-size 16 \
+      --embed-dim 384 --depth 10 --num-heads 6 --epochs 20 --wandb --project tinyvit
+"""
+
+import os
+import math
+from datetime import datetime
+from typing import Optional, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+import torch.backends.cudnn as cudnn
+
+import torchvision
+import torchvision.transforms as T
+
+# -----------------------------
+# Model: TinyViT
+# -----------------------------
+class PatchEmbed(nn.Module):
+    def __init__(self, img_size=32, patch_size=4, in_chans=3, embed_dim=192):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
+
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim,
+            kernel_size=patch_size, stride=patch_size, padding=0
+        )
+
+    def forward(self, x):
+        # x: (B, C, H, W)
+        x = self.proj(x)  # (B, E, H/patch, W/patch)
+        B, E, H2, W2 = x.shape
+        x = x.flatten(2).transpose(1, 2)  # (B, N, E)
+        return x, (H2 * W2)
+
+
+class MlpBlock(nn.Module):
+    def __init__(self, embed_dim, mlp_ratio=2.0, dropout_rate=0.1):
+        super().__init__()
+        hidden_dim = int(embed_dim * mlp_ratio)
+        self.fc1 = nn.Linear(embed_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, embed_dim)
+        self.drop = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_dim, num_heads, mlp_ratio=2.0, dropout_rate=0.1):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout_rate, batch_first=True
+        )
+        self.drop_path1 = nn.Dropout(dropout_rate)
+
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.mlp = MlpBlock(embed_dim, mlp_ratio, dropout_rate)
+        self.drop_path2 = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        y = self.norm1(x)
+        y, _ = self.attn(y, y, y, need_weights=False)
+        x = x + self.drop_path1(y)
+
+        y2 = self.norm2(x)
+        y2 = self.mlp(y2)
+        x = x + self.drop_path2(y2)
+        return x
+
+
+class TinyViT(nn.Module):
+    def __init__(
+        self,
+        img_size=32,
+        patch_size=4,
+        in_chans=3,
+        num_classes=10,
+        embed_dim=192,
+        depth=8,
+        num_heads=3,
+        mlp_ratio=2.0,
+        dropout_rate=0.1,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_classes = num_classes
+
+        self.patch_embed = PatchEmbed(
+            img_size=img_size,
+            patch_size=patch_size,
+            in_chans=in_chans,
+            embed_dim=embed_dim
+        )
+        num_patches = (img_size // patch_size) ** 2
+
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.pos_drop = nn.Dropout(dropout_rate)
+
+        self.blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout_rate)
+            for _ in range(depth)
+        ])
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, num_classes)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        nn.init.trunc_normal_(self.head.weight, std=0.02)
+        if self.head.bias is not None:
+            nn.init.zeros_(self.head.bias)
+
+        def _init(m):
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        self.apply(_init)
+
+    def forward(self, x):
+        B = x.shape[0]
+        x, _ = self.patch_embed(x)  # (B, N, E)
+
+        cls_tokens = self.cls_token.expand(B, -1, -1)  # (B,1,E)
+        x = torch.cat([cls_tokens, x], dim=1)  # (B, N+1, E)
+
+        x = x + self.pos_embed
+        x = self.pos_drop(x)
+
+        for blk in self.blocks:
+            x = blk(x)
+
+        x = self.norm(x)
+        cls_out = x[:, 0]
+        logits = self.head(cls_out)
+        return logits
+
+
+# -----------------------------
+# Dataset factory
+# -----------------------------
+def build_dataset(
+    name: str = "CIFAR10",
+    root: str = "./data",
+    img_size: Optional[int] = None,
+    split_celebA: str = "train",  # "train", "valid", "test"
+):
+    """
+    Returns: (train_ds, test_ds, num_classes, in_chans, final_img_size, task_type)
+    task_type: "multiclass" or "multilabel"
+    """
+    name = name.upper()
+    default_img = {
+        "CIFAR10": 32,
+        "CIFAR100": 32,
+        "STL10": 96,
+        "FOOD101": 224,
+        "FLOWERS102": 224,
+        "CELEBA": 64,
+        "SVHN": 32,
+    }
+    if img_size is None:
+        img_size = default_img.get(name, 32)
+
+    imagenet_mean = (0.485, 0.456, 0.406)
+    imagenet_std  = (0.229, 0.224, 0.225)
+    cifar_mean = (0.4914, 0.4822, 0.4465)
+    cifar_std  = (0.2470, 0.2435, 0.2616)
+
+    def make_aug(norm_mean, norm_std, img_size, crop_pad=4, heavy=False):
+        train_tf = [
+            T.RandomResizedCrop(img_size, scale=(0.8, 1.0)) if heavy else T.RandomCrop(img_size, padding=crop_pad),
+            T.RandomHorizontalFlip(),
+            T.ColorJitter(0.2, 0.2, 0.2),
+            T.ToTensor(),
+            T.Normalize(norm_mean, norm_std),
+        ]
+        test_tf = [
+            T.Resize(img_size),
+            T.CenterCrop(img_size),
+            T.ToTensor(),
+            T.Normalize(norm_mean, norm_std),
+        ]
+        return T.Compose(train_tf), T.Compose(test_tf)
+
+    if name == "CIFAR10":
+        train_tf, test_tf = make_aug(cifar_mean, cifar_std, img_size, crop_pad=4, heavy=False)
+        train_ds = torchvision.datasets.CIFAR10(root=root, train=True, download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.CIFAR10(root=root, train=False, download=True, transform=test_tf)
+        num_classes, task = 10, "multiclass"
+
+    elif name == "CIFAR100":
+        train_tf, test_tf = make_aug(cifar_mean, cifar_std, img_size, crop_pad=4, heavy=False)
+        train_ds = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=test_tf)
+        num_classes, task = 100, "multiclass"
+
+    elif name == "STL10":
+        train_tf, test_tf = make_aug(imagenet_mean, imagenet_std, img_size, crop_pad=8, heavy=True)
+        train_ds = torchvision.datasets.STL10(root=root, split="train", download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.STL10(root=root, split="test",  download=True, transform=test_tf)
+        num_classes, task = 10, "multiclass"
+
+    elif name == "FOOD101":
+        train_tf, test_tf = make_aug(imagenet_mean, imagenet_std, img_size, crop_pad=16, heavy=True)
+        train_ds = torchvision.datasets.Food101(root=root, split="train", download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.Food101(root=root, split="test",  download=True, transform=test_tf)
+        num_classes, task = 101, "multiclass"
+
+    elif name == "FLOWERS102":
+        train_tf, test_tf = make_aug(imagenet_mean, imagenet_std, img_size, crop_pad=16, heavy=True)
+        train_ds = torchvision.datasets.Flowers102(root=root, split="train", download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.Flowers102(root=root, split="test",  download=True, transform=test_tf)
+        num_classes, task = 102, "multiclass"
+
+    elif name == "SVHN":
+        train_tf, test_tf = make_aug(cifar_mean, cifar_std, img_size, crop_pad=4, heavy=False)
+        train_ds = torchvision.datasets.SVHN(root=root, split="train", download=True, transform=train_tf)
+        test_ds  = torchvision.datasets.SVHN(root=root, split="test",  download=True, transform=test_tf)
+        num_classes, task = 10, "multiclass"
+
+    elif name == "CELEBA":
+        # Multi-label (40 attributes)
+        def celebA_transforms(train=True):
+            ops = []
+            ops += [T.CenterCrop(178)]
+            if train:
+                ops += [T.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
+                        T.RandomHorizontalFlip(),
+                        T.ColorJitter(0.2,0.2,0.2)]
+            else:
+                ops += [T.Resize(img_size), T.CenterCrop(img_size)]
+            ops += [T.ToTensor(), T.Normalize(imagenet_mean, imagenet_std)]
+            return T.Compose(ops)
+
+        train_ds = torchvision.datasets.CelebA(root=root, split="train" if split_celebA=="train" else split_celebA,
+                                               download=True, transform=celebA_transforms(True))
+        test_ds  = torchvision.datasets.CelebA(root=root, split="test",
+                                               download=True, transform=celebA_transforms(False))
+        num_classes, task = 40, "multilabel"
+
+    else:
+        raise ValueError(f"Unknown dataset: {name}")
+
+    return train_ds, test_ds, num_classes, 3, img_size, task
+
+
+# -----------------------------
+# Data loaders
+# -----------------------------
+def make_loaders(
+    dataset_name="CIFAR10",
+    root="./data",
+    img_size: Optional[int] = None,
+    batch_size_train=128,
+    batch_size_test=256,
+    num_workers=4,
+    device=None
+):
+    train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(dataset_name, root, img_size)
+
+    pin = (device is not None and device.type == "cuda")
+    pw = (num_workers > 0)
+
+    train_loader = DataLoader(
+        train_ds, batch_size=batch_size_train, shuffle=True,
+        drop_last=True, num_workers=num_workers, pin_memory=pin, persistent_workers=pw
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=batch_size_test, shuffle=False,
+        drop_last=False, num_workers=num_workers, pin_memory=pin, persistent_workers=pw
+    )
+    return train_loader, test_loader, num_classes, in_chans, img_size, task
+
+
+# -----------------------------
+# Losses & Metrics
+# -----------------------------
+def get_criterion(task_type: str, label_smoothing: float = 0.0):
+    if task_type == "multilabel":
+        return nn.BCEWithLogitsLoss()
+    else:
+        return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+
+@torch.no_grad()
+def multilabel_accuracy(logits, targets):
+    # Average per-label accuracy across batch
+    preds = (logits > 0).to(targets.dtype)
+    return (preds == targets).float().mean().item()
+
+# -----------------------------
+# Train / Eval loops
+# -----------------------------
+def train_one_epoch(model, loader, optimizer, scaler, device, task_type="multiclass",
+                    grad_clip=None, label_smoothing=0.0):
+    model.train()
+    criterion = get_criterion(task_type, label_smoothing)
+    total_loss, total_acc, total = 0.0, 0.0, 0
+
+    for imgs, labels in loader:
+        imgs = imgs.to(device, non_blocking=True)
+        if task_type == "multilabel":
+            labels = labels.to(device, non_blocking=True).float()
+        else:
+            labels = labels.to(device, non_blocking=True).long()
+
+        optimizer.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+            logits = model(imgs)
+            loss = criterion(logits, labels)
+
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_clip is not None:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
+
+        with torch.no_grad():
+            bs = labels.size(0)
+            total_loss += loss.item() * bs
+            if task_type == "multilabel":
+                acc = multilabel_accuracy(logits, labels)
+                total_acc += acc * bs
+            else:
+                preds = logits.argmax(dim=-1)
+                total_acc += (preds == labels).float().mean().item() * bs
+            total += bs
+
+    return total_loss / total, total_acc / total
+
+
+@torch.no_grad()
+def evaluate(model, loader, device, task_type="multiclass", label_smoothing=0.0):
+    model.eval()
+    criterion = get_criterion(task_type, label_smoothing)
+    total_loss, total_acc, total = 0.0, 0.0, 0
+    with torch.inference_mode():
+        for imgs, labels in loader:
+            imgs = imgs.to(device, non_blocking=True)
+            if task_type == "multilabel":
+                labels = labels.to(device, non_blocking=True).float()
+            else:
+                labels = labels.to(device, non_blocking=True).long()
+
+            logits = model(imgs)
+            loss = criterion(logits, labels)
+
+            bs = labels.size(0)
+            total_loss += loss.item() * bs
+            if task_type == "multilabel":
+                acc = multilabel_accuracy(logits, labels)
+                total_acc += acc * bs
+            else:
+                preds = logits.argmax(dim=-1)
+                total_acc += (preds == labels).float().mean().item() * bs
+            total += bs
+
+    return total_loss / total, total_acc / total
+
+
+# -----------------------------
+# Training driver
+# -----------------------------
+def run_training(
+    dataset_name="CIFAR10",
+    root="./data",
+    num_runs=1,
+    num_epochs=10,
+    save_interval=2,
+    lr=3e-4,
+    wd=0.05,
+    grad_clip=1.0,
+    base_dir="./tinyvit_runs",
+    seed_base=1337,
+    num_workers=4,
+    img_size: Optional[int] = None,
+    patch_size=4,
+    embed_dim=192,
+    depth=8,
+    num_heads=3,
+    mlp_ratio=2.0,
+    dropout_rate=0.1,
+    label_smoothing=0.0,
+    warmup_epochs: Optional[int] = None,
+    cosine=True,
+    compile_model=False,
+    wandb_on=False,
+    wandb_project="tinyvit",
+    wandb_runname=None,
+):
+    os.makedirs(base_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cudnn.benchmark = (device.type == "cuda")
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
+
+    # data/loaders
+    train_loader, test_loader, num_classes, in_chans, final_img_size, task = make_loaders(
+        dataset_name=dataset_name,
+        root=root,
+        img_size=img_size,
+        num_workers=num_workers,
+        device=device
+    )
+
+    # wandb (optional)
+    if wandb_on:
+        try:
+            import wandb
+            wandb.init(project=wandb_project, name=wandb_runname,
+                       config=dict(dataset=dataset_name, img_size=final_img_size,
+                                   patch_size=patch_size, embed_dim=embed_dim, depth=depth,
+                                   num_heads=num_heads, mlp_ratio=mlp_ratio, dropout_rate=dropout_rate,
+                                   lr=lr, wd=wd, label_smoothing=label_smoothing,
+                                   epochs=num_epochs, cosine=cosine))
+        except Exception as e:
+            print(f"[wandb] failed to init: {e}")
+            wandb_on = False
+
+    for run_idx in range(num_runs):
+        run_dir = os.path.join(base_dir, f"{dataset_name}_run_{run_idx:03d}")
+        os.makedirs(run_dir, exist_ok=True)
+
+        seed = seed_base + run_idx
+        torch.manual_seed(seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(seed)
+
+        model = TinyViT(
+            img_size=final_img_size, patch_size=patch_size, in_chans=in_chans,
+            num_classes=num_classes, embed_dim=embed_dim, depth=depth,
+            num_heads=num_heads, mlp_ratio=mlp_ratio, dropout_rate=dropout_rate
+        ).to(device)
+
+        if compile_model and hasattr(torch, "compile"):
+            model = torch.compile(model)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+
+        # scheduler: cosine with linear warmup
+        if warmup_epochs is None:
+            warmup_epochs = max(1, min(5, int(0.1 * num_epochs)))
+        if cosine:
+            def lr_lambda(e):
+                if e < warmup_epochs:
+                    return (e + 1) / max(1, warmup_epochs)
+                t = (e - warmup_epochs) / max(1, (num_epochs - warmup_epochs))
+                return 0.5 * (1.0 + math.cos(math.pi * t))
+        else:
+            def lr_lambda(e):
+                if e < warmup_epochs:
+                    return (e + 1) / max(1, warmup_epochs)
+                return 1.0
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+        scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
+        print(f"\nStarting {dataset_name} run {run_idx+1}/{num_runs} → {run_dir}")
+        for epoch in range(num_epochs):
+            train_loss, train_acc = train_one_epoch(
+                model, train_loader, optimizer, scaler, device,
+                task_type=task, grad_clip=grad_clip, label_smoothing=label_smoothing
+            )
+            eval_loss, eval_acc = evaluate(
+                model, test_loader, device, task_type=task, label_smoothing=label_smoothing
+            )
+            scheduler.step()
+
+            lr_now = scheduler.get_last_lr()[0]
+            msg = (f"[{dataset_name}] Epoch {epoch:03d} | lr {lr_now:.2e} | "
+                   f"train {train_loss:.4f}/{train_acc:.4f} | "
+                   f"val {eval_loss:.4f}/{eval_acc:.4f}")
+            print(msg)
+            if wandb_on:
+                try:
+                    import wandb
+                    wandb.log({
+                        "epoch": epoch,
+                        "lr": lr_now,
+                        "train/loss": train_loss,
+                        "train/acc": train_acc,
+                        "val/loss": eval_loss,
+                        "val/acc": eval_acc
+                    })
+                except Exception as e:
+                    print(f"[wandb] log failed: {e}")
+
+            if epoch == 0 or (epoch % save_interval == 0) or (epoch == num_epochs - 1):
+                ckpt_path = os.path.join(run_dir, f"epoch_{epoch:03d}.pt")
+                torch.save({
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "eval_loss": eval_loss,
+                    "eval_acc": eval_acc,
+                    "dataset": dataset_name,
+                    "task": task,
+                    "img_size": final_img_size,
+                    "patch_size": patch_size,
+                    "timestamp": datetime.now().isoformat(),
+                    "seed": seed
+                }, ckpt_path)
+                print(f"Saved checkpoint → {ckpt_path}")
+
+    if wandb_on:
+        try:
+            import wandb
+            wandb.finish()
+        except Exception:
+            pass
+
+
+# -----------------------------
+# CLI
+# -----------------------------
+def parse_args():
+    import argparse
+    p = argparse.ArgumentParser(description="TinyViT training (PyTorch-only)")
+
+    # data
+    p.add_argument("--dataset", type=str, default="CIFAR10",
+                   choices=["CIFAR10","CIFAR100","STL10","FOOD101","FLOWERS102","SVHN","CELEBA"])
+    p.add_argument("--root", type=str, default="./data")
+    p.add_argument("--img-size", type=int, default=None)
+    p.add_argument("--batch-size", type=int, default=128)
+    p.add_argument("--batch-size-test", type=int, default=256)
+    p.add_argument("--num-workers", type=int, default=4)
+
+    # model
+    p.add_argument("--patch-size", type=int, default=4)
+    p.add_argument("--embed-dim", type=int, default=192)
+    p.add_argument("--depth", type=int, default=8)
+    p.add_argument("--num-heads", type=int, default=3)
+    p.add_argument("--mlp-ratio", type=float, default=2.0)
+    p.add_argument("--dropout", type=float, default=0.1)
+
+    # train
+    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--wd", type=float, default=0.05)
+    p.add_argument("--grad-clip", type=float, default=1.0)
+    p.add_argument("--save-interval", type=int, default=2)
+    p.add_argument("--runs", type=int, default=1)
+    p.add_argument("--seed-base", type=int, default=1337)
+    p.add_argument("--outdir", type=str, default="./tinyvit_runs")
+    p.add_argument("--label-smoothing", type=float, default=0.0)
+    p.add_argument("--warmup-epochs", type=int, default=None)
+    p.add_argument("--no-cosine", action="store_true", help="Disable cosine schedule after warmup")
+    p.add_argument("--compile", action="store_true", help="Use torch.compile if available")
+
+    # wandb
+    p.add_argument("--wandb", action="store_true")
+    p.add_argument("--project", type=str, default="tinyvit")
+    p.add_argument("--run-name", type=str, default=None)
+
+    args = p.parse_args()
+    return args
+
+
+def main():
+    args = parse_args()
+
+    # Construct loaders with explicit batch sizes
+    # We route batch sizes via environment so we can reuse make_loaders
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # We recreate loaders inside run_training; here we just pass CLI params downstream.
+    run_training(
+        dataset_name=args.dataset,
+        root=args.root,
+        num_runs=args.runs,
+        num_epochs=args.epochs,
+        save_interval=args.save_interval,
+        lr=args.lr,
+        wd=args.wd,
+        grad_clip=args.grad_clip,
+        base_dir=args.outdir,
+        seed_base=args.seed_base,
+        num_workers=args.num_workers,
+        img_size=args.img_size,
+        patch_size=args.patch_size,
+        embed_dim=args.embed_dim,
+        depth=args.depth,
+        num_heads=args.num_heads,
+        mlp_ratio=args.mlp_ratio,
+        dropout_rate=args.dropout,
+        label_smoothing=args.label_smoothing,
+        warmup_epochs=args.warmup_epochs,
+        cosine=(not args.no_cosine),
+        compile_model=args.compile,
+        wandb_on=args.wandb,
+        wandb_project=args.project,
+        wandb_runname=args.run_name,
+    )
+
+
+if __name__ == "__main__":
+    main()
