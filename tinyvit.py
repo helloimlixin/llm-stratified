@@ -2,7 +2,8 @@
 # coding: utf-8
 """
 TinyViT training script (PyTorch-only) with dataset factory, CLI flags,
-warmup+cosine LR, label smoothing, optional torch.compile, and optional wandb.
+warmup+cosine LR, label smoothing, optional torch.compile, optional wandb,
+and multi-GPU support via DistributedDataParallel (DDP).
 
 Supported datasets (torchvision):
 - CIFAR10, CIFAR100
@@ -12,9 +13,18 @@ Supported datasets (torchvision):
 - SVHN
 - CelebA (multi-label, 40 attributes)
 
-Example:
-  python tinyvit_train.py --dataset FOOD101 --img-size 224 --patch-size 16 \
-      --embed-dim 384 --depth 10 --num-heads 6 --epochs 20 --wandb --project tinyvit
+Examples:
+  # Single GPU
+  python tinyvit.py --dataset CIFAR10 --epochs 20 --wandb --project tinyvit
+
+  # Multi-GPU (auto-detected, uses DDP automatically)
+  python tinyvit.py --dataset FOOD101 --img-size 224 --epochs 20 --wandb --project tinyvit
+
+  # Multi-GPU with torchrun (recommended)
+  torchrun --nproc_per_node=2 tinyvit.py --dataset CIFAR10 --epochs 20 --wandb --project tinyvit
+
+  # Explicit DDP
+  python tinyvit.py --dataset CIFAR10 --ddp --epochs 20 --wandb --project tinyvit
 """
 
 import os
@@ -25,8 +35,9 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
 
 import torchvision
 import torchvision.transforms as T
@@ -290,20 +301,39 @@ def make_loaders(
     batch_size_train=128,
     batch_size_test=256,
     num_workers=4,
-    device=None
+    device=None,
+    distributed=False,
+    rank=0,
+    world_size=1
 ):
     train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(dataset_name, root, img_size)
 
     pin = (device is not None and device.type == "cuda")
     pw = (num_workers > 0)
 
+    # Use DistributedSampler for multi-GPU training
+    if distributed:
+        train_sampler = DistributedSampler(
+            train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True
+        )
+        test_sampler = DistributedSampler(
+            test_ds, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
+        )
+        shuffle_train = False  # sampler handles shuffling
+    else:
+        train_sampler = None
+        test_sampler = None
+        shuffle_train = True
+
     train_loader = DataLoader(
-        train_ds, batch_size=batch_size_train, shuffle=True,
-        drop_last=True, num_workers=num_workers, pin_memory=pin, persistent_workers=pw
+        train_ds, batch_size=batch_size_train, shuffle=shuffle_train,
+        sampler=train_sampler, drop_last=True, num_workers=num_workers,
+        pin_memory=pin, persistent_workers=pw
     )
     test_loader = DataLoader(
         test_ds, batch_size=batch_size_test, shuffle=False,
-        drop_last=False, num_workers=num_workers, pin_memory=pin, persistent_workers=pw
+        sampler=test_sampler, drop_last=False, num_workers=num_workers,
+        pin_memory=pin, persistent_workers=pw
     )
     return train_loader, test_loader, num_classes, in_chans, img_size, task
 
@@ -327,9 +357,14 @@ def multilabel_accuracy(logits, targets):
 # Train / Eval loops
 # -----------------------------
 def train_one_epoch(model, loader, optimizer, scaler, device, task_type="multiclass",
-                    grad_clip=None, label_smoothing=0.0):
+                    grad_clip=None, label_smoothing=0.0, epoch=0, sampler=None):
     model.train()
     criterion = get_criterion(task_type, label_smoothing)
+    
+    # Set epoch for distributed sampler
+    if sampler is not None:
+        sampler.set_epoch(epoch)
+    
     total_loss, total_acc, total = 0.0, 0.0, 0
 
     for imgs, labels in loader:
@@ -429,39 +464,129 @@ def run_training(
     wandb_on=False,
     wandb_project="tinyvit",
     wandb_runname=None,
+    batch_size_train=128,
+    batch_size_test=256,
+    use_ddp=False,
+    local_rank=0,
+    world_size=1,
 ):
-    os.makedirs(base_dir, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Setup distributed training
+    if use_ddp:
+        # Check if already initialized (e.g., by torchrun)
+        if not dist.is_initialized():
+            # Manual initialization for non-torchrun launches
+            rank = int(os.environ.get("RANK", local_rank))
+            world_size = int(os.environ.get("WORLD_SIZE", world_size))
+            dist.init_process_group(
+                backend="nccl",
+                init_method=f"tcp://{os.environ.get('MASTER_ADDR', 'localhost')}:{os.environ.get('MASTER_PORT', '12355')}",
+                rank=rank,
+                world_size=world_size
+            )
+        else:
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        
+        local_rank = int(os.environ.get("LOCAL_RANK", local_rank))
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+        is_main_process = (rank == 0)
+    else:
+        rank = 0
+        local_rank = 0
+        world_size = 1
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        is_main_process = True
+
+    if is_main_process:
+        os.makedirs(base_dir, exist_ok=True)
+    
     cudnn.benchmark = (device.type == "cuda")
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("high")
+
+    # Adjust batch size per GPU for distributed training
+    effective_batch_size_train = batch_size_train
+    effective_batch_size_test = batch_size_test
+    if use_ddp:
+        effective_batch_size_train = batch_size_train // world_size
+        effective_batch_size_test = batch_size_test // world_size
+        if is_main_process:
+            print(f"[DDP] Using {world_size} GPUs, batch size per GPU: train={effective_batch_size_train}, test={effective_batch_size_test}")
 
     # data/loaders
     train_loader, test_loader, num_classes, in_chans, final_img_size, task = make_loaders(
         dataset_name=dataset_name,
         root=root,
         img_size=img_size,
+        batch_size_train=effective_batch_size_train,
+        batch_size_test=effective_batch_size_test,
         num_workers=num_workers,
-        device=device
+        device=device,
+        distributed=use_ddp,
+        rank=rank,
+        world_size=world_size
     )
+    
+    # Get sampler for epoch setting
+    train_sampler = train_loader.sampler if use_ddp else None
 
-    # wandb (optional)
-    if wandb_on:
+    # wandb (optional) - only init on main process
+    if wandb_on and is_main_process:
         try:
             import wandb
-            wandb.init(project=wandb_project, name=wandb_runname,
-                       config=dict(dataset=dataset_name, img_size=final_img_size,
-                                   patch_size=patch_size, embed_dim=embed_dim, depth=depth,
-                                   num_heads=num_heads, mlp_ratio=mlp_ratio, dropout_rate=dropout_rate,
-                                   lr=lr, wd=wd, label_smoothing=label_smoothing,
-                                   epochs=num_epochs, cosine=cosine))
+            # Check if wandb is logged in or in offline mode
+            wandb_mode = os.environ.get("WANDB_MODE", "online")
+            if wandb_mode == "online":
+                try:
+                    api_key = wandb.api.api_key
+                    if api_key is None:
+                        print("[wandb] WARNING: Not logged in. Use 'wandb login' or set WANDB_MODE=offline")
+                        print("[wandb] Continuing in offline mode...")
+                        os.environ["WANDB_MODE"] = "offline"
+                except:
+                    print("[wandb] WARNING: Could not check login status. Continuing...")
+            
+            wandb_config = dict(
+                dataset=dataset_name,
+                img_size=final_img_size,
+                patch_size=patch_size,
+                embed_dim=embed_dim,
+                depth=depth,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+                dropout_rate=dropout_rate,
+                lr=lr,
+                wd=wd,
+                label_smoothing=label_smoothing,
+                epochs=num_epochs,
+                cosine=cosine,
+                batch_size_train=batch_size_train,
+                batch_size_test=batch_size_test,
+                effective_batch_size_train=effective_batch_size_train * world_size if use_ddp else batch_size_train,
+                effective_batch_size_test=effective_batch_size_test * world_size if use_ddp else batch_size_test,
+                num_gpus=world_size,
+                use_ddp=use_ddp,
+                compile_model=compile_model,
+                grad_clip=grad_clip,
+                warmup_epochs=warmup_epochs,
+            )
+            wandb.init(project=wandb_project, name=wandb_runname, config=wandb_config)
+            print(f"[wandb] Initialized successfully - Project: {wandb_project}, Run: {wandb.run.name if wandb.run else wandb_runname}")
+            print(f"[wandb] View run at: {wandb.run.url if wandb.run else 'N/A'}")
         except Exception as e:
-            print(f"[wandb] failed to init: {e}")
+            if is_main_process:
+                print(f"[wandb] ERROR: Failed to initialize wandb: {e}")
+                import traceback
+                traceback.print_exc()
             wandb_on = False
 
     for run_idx in range(num_runs):
-        run_dir = os.path.join(base_dir, f"{dataset_name}_run_{run_idx:03d}")
-        os.makedirs(run_dir, exist_ok=True)
+        if is_main_process:
+            run_dir = os.path.join(base_dir, f"{dataset_name}_run_{run_idx:03d}")
+            os.makedirs(run_dir, exist_ok=True)
+        else:
+            run_dir = None
 
         seed = seed_base + run_idx
         torch.manual_seed(seed)
@@ -474,10 +599,22 @@ def run_training(
             num_heads=num_heads, mlp_ratio=mlp_ratio, dropout_rate=dropout_rate
         ).to(device)
 
+        # Wrap model with DDP for multi-GPU training
+        if use_ddp:
+            model = nn.parallel.DistributedDataParallel(
+                model, device_ids=[local_rank], output_device=local_rank,
+                find_unused_parameters=False
+            )
+            model_for_saving = model.module  # unwrapped model for saving
+        else:
+            model_for_saving = model
+
         if compile_model and hasattr(torch, "compile"):
             model = torch.compile(model)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+        # Scale learning rate by world size for DDP (linear scaling rule)
+        effective_lr = lr * world_size if use_ddp else lr
+        optimizer = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=wd)
 
         # scheduler: cosine with linear warmup
         if warmup_epochs is None:
@@ -497,61 +634,90 @@ def run_training(
 
         scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
-        print(f"\nStarting {dataset_name} run {run_idx+1}/{num_runs} → {run_dir}")
+        if is_main_process:
+            print(f"\nStarting {dataset_name} run {run_idx+1}/{num_runs} → {run_dir}")
+            if use_ddp:
+                print(f"[DDP] Effective LR: {effective_lr:.2e} (base: {lr:.2e} × {world_size} GPUs)")
+        
         for epoch in range(num_epochs):
             train_loss, train_acc = train_one_epoch(
                 model, train_loader, optimizer, scaler, device,
-                task_type=task, grad_clip=grad_clip, label_smoothing=label_smoothing
+                task_type=task, grad_clip=grad_clip, label_smoothing=label_smoothing,
+                epoch=epoch, sampler=train_sampler
             )
             eval_loss, eval_acc = evaluate(
                 model, test_loader, device, task_type=task, label_smoothing=label_smoothing
             )
             scheduler.step()
 
+            # Synchronize metrics across GPUs for DDP
+            if use_ddp:
+                # Average metrics across all GPUs
+                metrics_tensor = torch.tensor([train_loss, train_acc, eval_loss, eval_acc], device=device)
+                dist.all_reduce(metrics_tensor, op=dist.ReduceOp.SUM)
+                metrics_tensor /= world_size
+                train_loss, train_acc, eval_loss, eval_acc = metrics_tensor.cpu().tolist()
+
             lr_now = scheduler.get_last_lr()[0]
-            msg = (f"[{dataset_name}] Epoch {epoch:03d} | lr {lr_now:.2e} | "
-                   f"train {train_loss:.4f}/{train_acc:.4f} | "
-                   f"val {eval_loss:.4f}/{eval_acc:.4f}")
-            print(msg)
-            if wandb_on:
-                try:
-                    import wandb
-                    wandb.log({
+            
+            if is_main_process:
+                msg = (f"[{dataset_name}] Epoch {epoch:03d} | lr {lr_now:.2e} | "
+                       f"train {train_loss:.4f}/{train_acc:.4f} | "
+                       f"val {eval_loss:.4f}/{eval_acc:.4f}")
+                if use_ddp:
+                    msg += f" | GPUs: {world_size}"
+                print(msg)
+                
+                if wandb_on:
+                    try:
+                        import wandb
+                        log_dict = {
+                            "epoch": epoch,
+                            "lr": lr_now,
+                            "train/loss": train_loss,
+                            "train/acc": train_acc,
+                            "val/loss": eval_loss,
+                            "val/acc": eval_acc,
+                        }
+                        wandb.log(log_dict)
+                        if epoch == 0 or epoch % 10 == 0:  # Print every 10 epochs to avoid spam
+                            print(f"[wandb] Logged metrics for epoch {epoch}")
+                    except Exception as e:
+                        print(f"[wandb] ERROR: Failed to log metrics: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+                if epoch == 0 or (epoch % save_interval == 0) or (epoch == num_epochs - 1):
+                    ckpt_path = os.path.join(run_dir, f"epoch_{epoch:03d}.pt")
+                    torch.save({
                         "epoch": epoch,
-                        "lr": lr_now,
-                        "train/loss": train_loss,
-                        "train/acc": train_acc,
-                        "val/loss": eval_loss,
-                        "val/acc": eval_acc
-                    })
-                except Exception as e:
-                    print(f"[wandb] log failed: {e}")
+                        "model_state": model_for_saving.state_dict(),
+                        "optimizer_state": optimizer.state_dict(),
+                        "train_loss": train_loss,
+                        "train_acc": train_acc,
+                        "eval_loss": eval_loss,
+                        "eval_acc": eval_acc,
+                        "dataset": dataset_name,
+                        "task": task,
+                        "img_size": final_img_size,
+                        "patch_size": patch_size,
+                        "timestamp": datetime.now().isoformat(),
+                        "seed": seed,
+                        "num_gpus": world_size,
+                        "use_ddp": use_ddp,
+                    }, ckpt_path)
+                    print(f"Saved checkpoint → {ckpt_path}")
 
-            if epoch == 0 or (epoch % save_interval == 0) or (epoch == num_epochs - 1):
-                ckpt_path = os.path.join(run_dir, f"epoch_{epoch:03d}.pt")
-                torch.save({
-                    "epoch": epoch,
-                    "model_state": model.state_dict(),
-                    "optimizer_state": optimizer.state_dict(),
-                    "train_loss": train_loss,
-                    "train_acc": train_acc,
-                    "eval_loss": eval_loss,
-                    "eval_acc": eval_acc,
-                    "dataset": dataset_name,
-                    "task": task,
-                    "img_size": final_img_size,
-                    "patch_size": patch_size,
-                    "timestamp": datetime.now().isoformat(),
-                    "seed": seed
-                }, ckpt_path)
-                print(f"Saved checkpoint → {ckpt_path}")
-
-    if wandb_on:
+    # Cleanup
+    if wandb_on and is_main_process:
         try:
             import wandb
             wandb.finish()
         except Exception:
             pass
+    
+    if use_ddp:
+        dist.destroy_process_group()
 
 
 # -----------------------------
@@ -593,9 +759,13 @@ def parse_args():
     p.add_argument("--compile", action="store_true", help="Use torch.compile if available")
 
     # wandb
-    p.add_argument("--wandb", action="store_true")
-    p.add_argument("--project", type=str, default="tinyvit")
-    p.add_argument("--run-name", type=str, default=None)
+    p.add_argument("--wandb", action="store_true", help="Enable wandb logging")
+    p.add_argument("--project", type=str, default="tinyvit", help="Wandb project name")
+    p.add_argument("--run-name", type=str, default=None, help="Wandb run name")
+
+    # multi-GPU
+    p.add_argument("--ddp", action="store_true", help="Use DistributedDataParallel for multi-GPU training")
+    p.add_argument("--local-rank", type=int, default=0, help="Local rank for distributed training (auto-set by torchrun)")
 
     args = p.parse_args()
     return args
@@ -604,11 +774,32 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Construct loaders with explicit batch sizes
-    # We route batch sizes via environment so we can reuse make_loaders
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Auto-detect multi-GPU if not explicitly set
+    use_ddp = args.ddp
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    
+    if not use_ddp and num_gpus > 1:
+        # Auto-enable DDP if multiple GPUs detected
+        use_ddp = True
+        print(f"[Auto] Detected {num_gpus} GPUs, enabling DDP mode")
+    
+    # Get local rank from environment (set by torchrun) or use CLI arg
+    local_rank = int(os.environ.get("LOCAL_RANK", args.local_rank))
+    
+    # Set world size from environment if available (torchrun sets this)
+    world_size = int(os.environ.get("WORLD_SIZE", num_gpus if use_ddp else 1))
+    
+    if use_ddp and world_size == 1:
+        # If DDP requested but only 1 GPU, disable DDP
+        use_ddp = False
+        print("[Warning] DDP requested but only 1 GPU available, disabling DDP")
+    
+    # Set environment variables for DDP if using torchrun
+    if use_ddp and "RANK" not in os.environ:
+        # Not launched with torchrun, will init in run_training
+        os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+        os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12355")
 
-    # We recreate loaders inside run_training; here we just pass CLI params downstream.
     run_training(
         dataset_name=args.dataset,
         root=args.root,
@@ -635,6 +826,11 @@ def main():
         wandb_on=args.wandb,
         wandb_project=args.project,
         wandb_runname=args.run_name,
+        batch_size_train=args.batch_size,
+        batch_size_test=args.batch_size_test,
+        use_ddp=use_ddp,
+        local_rank=local_rank,
+        world_size=world_size,
     )
 
 
