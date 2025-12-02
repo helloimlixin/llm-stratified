@@ -163,7 +163,7 @@ class TinyViT(nn.Module):
                     nn.init.zeros_(m.bias)
         self.apply(_init)
 
-    def forward(self, x):
+    def forward_features(self, x):
         B = x.shape[0]
         x, _ = self.patch_embed(x)  # (B, N, E)
 
@@ -177,6 +177,10 @@ class TinyViT(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
+        return x
+
+    def forward(self, x):
+        x = self.forward_features(x)
         cls_out = x[:, 0]
         logits = self.head(cls_out)
         return logits
@@ -204,6 +208,8 @@ def build_dataset(
         "FLOWERS102": 224,
         "CELEBA": 64,
         "SVHN": 32,
+        "IMAGENET": 256,
+        "FFHQ": 256,
     }
     if img_size is None:
         img_size = default_img.get(name, 32)
@@ -264,6 +270,46 @@ def build_dataset(
         train_ds = torchvision.datasets.SVHN(root=root, split="train", download=True, transform=train_tf)
         test_ds  = torchvision.datasets.SVHN(root=root, split="test",  download=True, transform=test_tf)
         num_classes, task = 10, "multiclass"
+
+    elif name == "IMAGENET":
+        # Expects ImageNet-style layout: root/train, root/val with class subfolders
+        train_tf = T.Compose([
+            T.RandomResizedCrop(img_size, scale=(0.08, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ColorJitter(0.2, 0.2, 0.2),
+            T.ToTensor(),
+            T.Normalize(imagenet_mean, imagenet_std),
+        ])
+        test_tf = T.Compose([
+            T.Resize(int(img_size * 1.14)),
+            T.CenterCrop(img_size),
+            T.ToTensor(),
+            T.Normalize(imagenet_mean, imagenet_std),
+        ])
+        train_ds = torchvision.datasets.ImageNet(root=root, split="train", transform=train_tf)
+        test_ds  = torchvision.datasets.ImageNet(root=root, split="val",   transform=test_tf)
+        num_classes, task = 1000, "multiclass"
+
+    elif name == "FFHQ":
+        # Expects ImageFolder-style layout: root/train, root/val (or both under root, adjust as needed)
+        train_tf = T.Compose([
+            T.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.ColorJitter(0.2, 0.2, 0.2),
+            T.ToTensor(),
+            T.Normalize(imagenet_mean, imagenet_std),
+        ])
+        test_tf = T.Compose([
+            T.Resize(int(img_size * 1.14)),
+            T.CenterCrop(img_size),
+            T.ToTensor(),
+            T.Normalize(imagenet_mean, imagenet_std),
+        ])
+        train_root = os.path.join(root, "train") if os.path.isdir(os.path.join(root, "train")) else root
+        val_root = os.path.join(root, "val") if os.path.isdir(os.path.join(root, "val")) else root
+        train_ds = torchvision.datasets.ImageFolder(root=train_root, transform=train_tf)
+        test_ds  = torchvision.datasets.ImageFolder(root=val_root,   transform=test_tf)
+        num_classes, task = len(train_ds.classes), "multiclass"
 
     elif name == "CELEBA":
         # Multi-label (40 attributes)
@@ -729,7 +775,7 @@ def parse_args():
 
     # data
     p.add_argument("--dataset", type=str, default="CIFAR10",
-                   choices=["CIFAR10","CIFAR100","STL10","FOOD101","FLOWERS102","SVHN","CELEBA"])
+                   choices=["CIFAR10","CIFAR100","STL10","FOOD101","FLOWERS102","SVHN","CELEBA","IMAGENET","FFHQ"])
     p.add_argument("--root", type=str, default="./data")
     p.add_argument("--img-size", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=128)
