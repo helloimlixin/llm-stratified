@@ -25,6 +25,7 @@ import numpy as np  # noqa: E402
 import scipy.spatial  # noqa: E402
 import scipy.stats  # noqa: E402
 import torch  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
 from accelerate import Accelerator  # noqa: E402
 from tqdm.auto import tqdm  # noqa: E402
 from torch.utils.data import DataLoader, Subset  # noqa: E402
@@ -278,6 +279,30 @@ def run_fiber_bundle_test(
     return outputs
 
 
+def predict_patch_class(
+    patch_img: torch.Tensor,
+    bbox: torch.Tensor,
+    model: TinyViT,
+    device: torch.device,
+    img_size: int,
+    dataset: str,
+    class_names: List[str] | None = None,
+) -> tuple[int, str | None]:
+    """Predict class for a patch region by cropping, resizing, and running the model."""
+    x0, y0, x1, y1 = [int(v) for v in bbox.tolist()]
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = max(x0 + 1, x1), max(y0 + 1, y1)
+    crop = patch_img[:, y0:y1, x0:x1].unsqueeze(0)  # 1,C,H,W
+    crop = F.interpolate(crop, size=(img_size, img_size), mode="bilinear", align_corners=False)
+    mean, std = get_norm_stats(dataset, device=device)
+    crop = (crop.to(device) - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+    with torch.no_grad():
+        logits = model(crop)
+        pred = int(logits.argmax(dim=-1).item())
+    name = class_names[pred] if class_names and 0 <= pred < len(class_names) else None
+    return pred, name
+
+
 def summarize_stratifications(results: List[Dict[str, List[float]]], alpha: float = 1e-2) -> Dict[str, float]:
     """Aggregate per-token stratification outputs."""
     first_dims, min_pvals, irr_scores = [], [], []
@@ -335,6 +360,20 @@ def tsne_embeddings_3d(embeddings: torch.Tensor, perplexity: float = 30.0, seed:
     )
     coords = tsne.fit_transform(emb_np)
     return coords
+
+
+def get_norm_stats(dataset: str, device: torch.device | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    dataset = dataset.upper()
+    if dataset in ["CIFAR10", "CIFAR100"]:
+        mean = torch.tensor([0.4914, 0.4822, 0.4465], device=device)
+        std = torch.tensor([0.2470, 0.2435, 0.2616], device=device)
+    elif dataset in ["SVHN"]:
+        mean = torch.tensor([0.4914, 0.4822, 0.4465], device=device)
+        std = torch.tensor([0.2470, 0.2435, 0.2616], device=device)
+    else:
+        mean = torch.tensor([0.485, 0.456, 0.406], device=device)
+        std = torch.tensor([0.229, 0.224, 0.225], device=device)
+    return mean, std
 
 
 def to_serializable(obj):
@@ -765,15 +804,34 @@ def main():
         subset_test=args.subset_test,
         device=device,
     )
-    # Resolve class names (works for torchvision datasets and Subsets)
-    def _resolve_classes(ds):
+    # Resolve class names (fallback to known semantic lists when available)
+    def _resolve_classes(ds, dataset_name: str):
+        name = dataset_name.upper()
+        known = {
+            "CIFAR10": [
+                "airplane",
+                "automobile",
+                "bird",
+                "cat",
+                "deer",
+                "dog",
+                "frog",
+                "horse",
+                "ship",
+                "truck",
+            ],
+            # FFHQ is faces only; provide a semantic placeholder
+            "FFHQ": ["face"],
+        }
+        if name in known:
+            return known[name]
         if hasattr(ds, "classes"):
             return ds.classes
         if hasattr(ds, "dataset"):
-            return _resolve_classes(ds.dataset)
+            return _resolve_classes(ds.dataset, name)
         return None
 
-    class_names = _resolve_classes(test_loader.dataset)
+    class_names = _resolve_classes(test_loader.dataset, args.dataset)
 
     # Model + opt
     model = TinyViT(
@@ -979,6 +1037,21 @@ def main():
                             top_k=12,
                         )
                         if irregular:
+                            # Add patch-level predicted class for each irregular region
+                            unwrapped_model = accelerator.unwrap_model(model)
+                            for item in irregular:
+                                pred_lbl, pred_name = predict_patch_class(
+                                    item["img"],
+                                    item["bbox"],
+                                    unwrapped_model,
+                                    accelerator.device,
+                                    img_size,
+                                    args.dataset,
+                                    class_names=class_names,
+                                )
+                                item["patch_pred_label"] = pred_lbl
+                                item["patch_pred_label_name"] = pred_name
+
                             wandb.log(
                                 {
                                     "embeddings/irregular_samples": [
@@ -988,6 +1061,7 @@ def main():
                                                 f"token {item['token_id']}, "
                                                 f"class {item.get('label_name', item['label'])}, "
                                                 f"pred {item.get('pred_label_name', item['pred_label'])}, "
+                                                f"patch_pred {item.get('patch_pred_label_name', item.get('patch_pred_label', ''))}, "
                                                 f"dim {item['dim']:.2f}, "
                                                 f"img_mean_dim {item['image_mean_dim']:.2f}, "
                                                 f"irr {item['irregularity']:.2f}"
