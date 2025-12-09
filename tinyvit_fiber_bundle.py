@@ -288,7 +288,13 @@ def stratification_test(
 ) -> Tuple[Optional[int], float]:
     """Sliding-window Welch t-test to spot stratifications."""
 
-    dimvec = np.gradient(np.log(volumes)) / np.gradient(np.log(radii))
+    radii_safe = np.clip(radii, 1e-12, None)  # avoid log/grad singularities
+    volumes_safe = np.maximum(volumes, 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        grad_v = np.gradient(np.log(volumes_safe))
+        grad_r = np.gradient(np.log(radii_safe))
+        grad_r = np.where(np.abs(grad_r) < 1e-12, np.nan, grad_r)  # prevent divide-by-zero
+        dimvec = np.divide(grad_v, grad_r, out=np.full_like(grad_v, np.nan), where=~np.isnan(grad_r))
     for w in range(2 * ws, dimvec.shape[0] - 2 * ws):
         t1 = dimvec[w - 2 * ws : w - ws]
         t1 = t1[np.logical_and(np.abs(t1) > 1e-5, np.isfinite(t1))]
@@ -566,16 +572,11 @@ def add_heatmap_patch(
     bbox: torch.Tensor,
     value: float,
     max_value: float = 5.0,
-<<<<<<< Updated upstream
-) -> Image.Image:
-    """Apply a heatmap tint to the patch region without drawing a solid box."""
-=======
     neigh_value: float | None = None,
     neigh_max: float = 10.0,
     neighborhood_size: float | None = None,
 ) -> Image.Image:
     """Apply a heatmap tint to the patch region (red/yellow = irregularity, blue = neighborhood dim)."""
->>>>>>> Stashed changes
     np_img = img_tensor.permute(1, 2, 0).clamp(0, 1).numpy()
     h, w, _ = np_img.shape
     x0, y0, x1, y1 = [int(v) for v in bbox.tolist()]
@@ -937,31 +938,23 @@ def plot_dimension_histogram(dims: np.ndarray, bins: int = 30) -> plt.Figure | N
     return fig
 
 
-def plot_patch_count_curve(image_ids: torch.Tensor | np.ndarray) -> plt.Figure | None:
-    """Plot sorted patch counts per image id to reveal sampling coverage."""
+def plot_patch_count_curve(dims: np.ndarray, bins: int = 30) -> plt.Figure | None:
+    """Plot how many patches fall into each local-dimension bin."""
 
-    if isinstance(image_ids, torch.Tensor):
-        ids = image_ids.view(-1).cpu().numpy()
-    else:
-        ids = np.asarray(image_ids)
-    if ids.size == 0:
+    valid = dims[np.isfinite(dims)]
+    if valid.size == 0:
         return None
-    unique_ids, counts = np.unique(ids, return_counts=True)
-    if unique_ids.size == 0:
-        return None
-    order = np.argsort(counts)[::-1]
-    sorted_counts = counts[order]
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(range(len(sorted_counts)), sorted_counts, marker="o", linewidth=1.2)
-    ax.set_xlabel("image rank (sorted by patch count)")
-    ax.set_ylabel("patch tokens collected")
-    ax.set_title("Patches per image (sorted)")
+    counts, edges, _ = ax.hist(valid, bins=bins, color="darkorange", edgecolor="black", alpha=0.85)
+    ax.set_xlabel("local dimension")
+    ax.set_ylabel("number of patches")
+    ax.set_title("Patch count by local dimension")
     fig.tight_layout()
     return fig
 
 
 def plot_dimension_radius_scatter(results: List[Dict[str, List[float]]]) -> plt.Figure | None:
-    """Scatter of first-layer radii vs estimated slopes (dimensions)."""
+    """Scatter of radius vs log(local dimension) with trend line."""
 
     radii, dims = [], []
     for res in results:
@@ -969,19 +962,85 @@ def plot_dimension_radius_scatter(results: List[Dict[str, List[float]]]) -> plt.
             continue
         dim_val = res["dimensions"][0]
         radius_val = res["strat_radii"][0]
-        if not np.isfinite(dim_val) or radius_val <= 0:
+        if not np.isfinite(dim_val) or radius_val <= 0 or dim_val <= 0:
             continue
         radii.append(radius_val)
         dims.append(dim_val)
     if not radii:
         return None
     radii_np = np.array(radii)
-    dims_np = np.array(dims)
+    dims_np = np.maximum(np.array(dims, dtype=np.float64), 1e-12)
+    log_dims = np.log(dims_np)
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.scatter(np.log10(radii_np), dims_np, s=18, alpha=0.7)
-    ax.set_xlabel("log10 radius")
-    ax.set_ylabel("estimated slope (dimension)")
-    ax.set_title("Slope vs radius per token")
+    x = radii_np
+    y = log_dims
+    ax.scatter(x, y, s=18, alpha=0.7)
+
+    # Add polynomial trend curve over finite points
+    finite = np.isfinite(x) & np.isfinite(y)
+    finite_x = x[finite]
+    finite_y = y[finite]
+    if finite_x.size >= 2:
+        deg = 2 if finite_x.size >= 3 else 1
+        coeffs = np.polyfit(finite_x, finite_y, deg)
+        poly = np.poly1d(coeffs)
+        x_line = np.linspace(x[finite].min(), x[finite].max(), 100)
+        y_line = poly(x_line)
+        label = "trend (deg2)" if deg == 2 else "trend (deg1)"
+        ax.plot(x_line, y_line, color="orange", linewidth=2.2, alpha=0.9, label=label)
+        ax.legend()
+
+    ax.set_xlabel("radius")
+    ax.set_ylabel("log(local dimension)")
+    ax.set_title("log(dim) vs radius per token")
+    fig.tight_layout()
+    return fig
+
+
+def plot_token_radius_curve_from_embeddings(
+    embeddings: torch.Tensor, token_idx: int, min_neighbors: int = 5
+) -> plt.Figure | None:
+    """For a specific token, compute pairwise radii to all other tokens and plot log(dim) vs radius.
+
+    Dimension at each radius is estimated via geo_estimator over the ball within that radius.
+    """
+
+    if embeddings.numel() == 0 or token_idx >= embeddings.shape[0]:
+        return None
+    emb_np = embeddings.cpu().numpy().astype(np.float64)
+    center = emb_np[token_idx][None, :]
+    dists = scipy.spatial.distance.cdist(center, emb_np)[0]
+    # Remove self (distance 0) and sort the rest
+    dists_sorted = np.sort(dists[1:])
+    if dists_sorted.size < min_neighbors:
+        return None
+    radii = np.clip(dists_sorted, 1e-12, None)
+    volumes = np.arange(1, radii.shape[0] + 1, dtype=np.int32)
+
+    radii_used: list[float] = []
+    dims_used: list[float] = []
+    args = SimpleNamespace(miller=False, ricci=False)
+    for k in range(min_neighbors, radii.shape[0] + 1):
+        r_segment = radii[:k]
+        v_segment = volumes[:k]
+        _, dim_est, _ = geo_estimator(r_segment, v_segment, npts=embeddings.shape[0], args=args)
+        if math.isfinite(dim_est) and dim_est > 0:
+            radii_used.append(r_segment[-1])
+            dims_used.append(dim_est)
+
+    if not radii_used:
+        return None
+
+    x = np.array(radii_used, dtype=np.float64)
+    y = np.log(np.array(dims_used, dtype=np.float64))
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+    ax.scatter(x, y, s=28, alpha=0.8, color="steelblue", label="log dim")
+
+    ax.set_xlabel("radius")
+    ax.set_ylabel("log(local dimension)")
+    ax.set_title(f"Token {token_idx} log(dim) vs radius")
+    ax.legend()
     fig.tight_layout()
     return fig
 
@@ -1319,20 +1378,12 @@ def main():
             accelerator.wait_for_everyone()
             local_max = None if args.embed_full_val else max(1, math.ceil(args.max_tokens / world_size))
             unwrapped = accelerator.unwrap_model(model)
-<<<<<<< Updated upstream
-            patch_size_value = unwrapped.patch_embed.patch_size
-=======
             patch_sz_eff = resolve_patch_size(unwrapped) or args.patch_size
->>>>>>> Stashed changes
             embeddings, labels, images, bboxes, img_ids, pred_labels = collect_patch_tokens(
                 unwrapped,
                 test_loader,
                 accelerator.device,
-<<<<<<< Updated upstream
-                patch_size=patch_size_value,
-=======
                 patch_size=patch_sz_eff,
->>>>>>> Stashed changes
                 max_tokens=local_max,
                 show_progress=is_main,
             )
@@ -1449,7 +1500,7 @@ def main():
                     plt.close(dim_hist_fig)
                     analysis_paths["fiber/dim_histogram"] = hist_path
 
-                patch_count_fig = plot_patch_count_curve(all_img_ids)
+                patch_count_fig = plot_patch_count_curve(final_dims)
                 if patch_count_fig is not None:
                     patch_path = analysis_dir / f"epoch_{epoch:03d}_patch_count.png"
                     patch_count_fig.savefig(patch_path, dpi=200)
@@ -1462,6 +1513,33 @@ def main():
                     slope_fig.savefig(slope_path, dpi=200)
                     plt.close(slope_fig)
                     analysis_paths["fiber/dim_radius_scatter"] = slope_path
+
+                # Per-token radius curves for low/median/high dimension tokens
+                token_radius_paths = {}
+                token_patch_paths = {}
+                finite_mask = np.isfinite(final_dims) & (final_dims > 0)
+                finite_indices = np.where(finite_mask)[0]
+                if finite_indices.size > 0:
+                    sorted_idx = finite_indices[np.argsort(final_dims[finite_indices])]
+                    picks = []
+                    if sorted_idx.size > 0:
+                        picks.append(("low_dim_token", int(sorted_idx[0])))
+                        picks.append(("mid_dim_token", int(sorted_idx[sorted_idx.size // 2])))
+                        picks.append(("high_dim_token", int(sorted_idx[-1])))
+
+                    denorm_images = denormalize_images(all_images, args.dataset).cpu()
+                    for label_name, idx_tok in picks:
+                        fig_tok = plot_token_radius_curve_from_embeddings(all_embeddings, idx_tok)
+                        if fig_tok is not None:
+                            tok_path = analysis_dir / f"epoch_{epoch:03d}_{label_name}_radius.png"
+                            fig_tok.savefig(tok_path, dpi=200)
+                            plt.close(fig_tok)
+                            token_radius_paths[label_name] = tok_path
+                        if idx_tok < len(all_bboxes) and idx_tok < len(denorm_images):
+                            patch_img = extract_patch_image(denorm_images[idx_tok], all_bboxes[idx_tok])
+                            patch_path = analysis_dir / f"epoch_{epoch:03d}_{label_name}_patch.png"
+                            patch_img.save(patch_path)
+                            token_patch_paths[label_name] = patch_path
 
                 extreme_visuals = prepare_dimension_extreme_visuals(
                     final_dims,
@@ -1515,6 +1593,10 @@ def main():
 
                         for key, path in analysis_paths.items():
                             log_dict[key] = wandb.Image(str(path))
+                        for key, path in token_radius_paths.items():
+                            log_dict[f"token_radius/{key}"] = wandb.Image(str(path))
+                        for key, path in token_patch_paths.items():
+                            log_dict[f"token_patch/{key}"] = wandb.Image(str(path))
 
                         if preview_data.get("low"):
                             log_dict["embeddings/low_dim_patches"] = [
@@ -1539,11 +1621,7 @@ def main():
                             fiber_results,
                             args.dataset,
                             all_bboxes,
-<<<<<<< Updated upstream
-                            neighborhood_dims=neighborhood_dims_vals,
-=======
                             neighborhood_dims=neighborhood_dims,
->>>>>>> Stashed changes
                             image_ids=all_img_ids,
                             class_names=class_names,
                             pred_labels=all_pred_labels,
@@ -1551,8 +1629,6 @@ def main():
                             top_k=12,
                         )
                         if irregular:
-<<<<<<< Updated upstream
-=======
                             neigh_max = max(
                                 [item["neigh_dim"] for item in irregular if math.isfinite(item["neigh_dim"])],
                                 default=1.0,
@@ -1560,7 +1636,6 @@ def main():
                             if neigh_max <= 0:
                                 neigh_max = 1.0
                             # Add patch-level predicted class for each irregular region
->>>>>>> Stashed changes
                             unwrapped_model = accelerator.unwrap_model(model)
                             for item in irregular:
                                 pred_lbl, pred_name = predict_patch_class(
@@ -1575,31 +1650,6 @@ def main():
                                 item["patch_pred_label"] = pred_lbl
                                 item["patch_pred_label_name"] = pred_name
 
-<<<<<<< Updated upstream
-                            heatmap_images = []
-                            for item in irregular:
-                                patch_pred_label = item.get(
-                                    "patch_pred_label_name",
-                                    item.get("patch_pred_label", ""),
-                                )
-                                caption = (
-                                    f"token {item['token_id']}, "
-                                    f"class {item.get('label_name', item['label'])}, "
-                                    f"pred {item.get('pred_label_name', item['pred_label'])}, "
-                                    f"patch_pred {patch_pred_label}, "
-                                    f"dim {item['dim']:.2f}, "
-                                    f"img_mean_dim {item['image_mean_dim']:.2f}, "
-                                    f"irr {item['irregularity']:.2f}"
-                                )
-                                heatmap_images.append(
-                                    wandb.Image(
-                                        add_heatmap_patch(item["img"], item["bbox"], item["irregularity"]),
-                                        caption=caption,
-                                    )
-                                )
-
-                            wandb.log({"embeddings/irregular_samples": heatmap_images})
-=======
                             wandb.log(
                                 {
                                     "embeddings/irregular_samples": [
@@ -1627,7 +1677,6 @@ def main():
                                     ]
                                 }
                         )
->>>>>>> Stashed changes
                     except Exception as e:
                         print(f"[wandb] logging failed: {e}")
 
