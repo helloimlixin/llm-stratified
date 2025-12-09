@@ -9,13 +9,12 @@ via Hugging Face Accelerate (use `accelerate launch`).
 """
 
 import argparse
-import io
 import os
 import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 
@@ -31,6 +30,11 @@ from tqdm.auto import tqdm  # noqa: E402
 from torch.utils.data import DataLoader, Subset  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 try:
+    import wandb  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - optional dependency
+    wandb = None  # type: ignore[assignment]
+
+try:
     from sklearn.manifold import TSNE  # noqa: E402
 
     HAS_TSNE = True
@@ -38,7 +42,7 @@ except ImportError:
     TSNE = None
     HAS_TSNE = False
 
-from tinyvit import TinyViT, build_dataset, get_criterion, multilabel_accuracy
+from tinyvit import TinyViT, build_dataset, get_criterion, multilabel_accuracy  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -177,8 +181,14 @@ def collect_patch_tokens(
     return emb_tensor, label_tensor, img_tensor, bbox_tensor, imgid_tensor, pred_tensor
 
 
-def geo_estimator(radii, volumes, npts, args):
-    """Estimate scaling coefficient, dimension, and Ricci (from kb1dds/stratified_estimator)."""
+def geo_estimator(
+    radii: np.ndarray,
+    volumes: np.ndarray,
+    npts: int,
+    args: SimpleNamespace,
+) -> Tuple[float, float, float]:
+    """Estimate scaling coefficient, intrinsic dimension, and Ricci term."""
+
     rstack = np.column_stack((np.ones_like(radii), np.log(radii)))
     pointwise_lfit_data = np.linalg.lstsq(rstack, np.log(volumes), rcond=None)
     pointwise_lfit = pointwise_lfit_data[0]
@@ -194,8 +204,14 @@ def geo_estimator(radii, volumes, npts, args):
     return scaling_coeff, dimension, ricci
 
 
-def stratification_test(radii, volumes, ws=10, alpha=1e-3):
-    """Sliding-window Welch t-test to spot stratifications (kb1dds/stratified_estimator)."""
+def stratification_test(
+    radii: np.ndarray,
+    volumes: np.ndarray,
+    ws: int = 10,
+    alpha: float = 1e-3,
+) -> Tuple[Optional[int], float]:
+    """Sliding-window Welch t-test to spot stratifications."""
+
     dimvec = np.gradient(np.log(volumes)) / np.gradient(np.log(radii))
     for w in range(2 * ws, dimvec.shape[0] - 2 * ws):
         t1 = dimvec[w - 2 * ws : w - ws]
@@ -208,8 +224,17 @@ def stratification_test(radii, volumes, ws=10, alpha=1e-3):
     return None, 1.0
 
 
-def estimate_stratifications(dists_sorted, vol_min, vol_max, npts, args, ws=10, alpha=1e-3):
-    """Detect stratifications (unchanged logic from kb1dds/stratified_estimator)."""
+def estimate_stratifications(
+    dists_sorted: np.ndarray,
+    vol_min: int,
+    vol_max: int,
+    npts: int,
+    args: SimpleNamespace,
+    ws: int = 10,
+    alpha: float = 1e-3,
+) -> Dict[str, List[float]]:
+    """Detect stratifications by repeatedly fitting geometric statistics."""
+
     radii = dists_sorted[vol_min:vol_max]
     volumes = np.arange(vol_min, vol_max)
     output: Dict[str, List[float]] = {
@@ -418,7 +443,12 @@ def add_red_bbox(img_tensor: torch.Tensor, thickness: int = 2) -> Image.Image:
     return pil_img
 
 
-def add_heatmap_patch(img_tensor: torch.Tensor, bbox: torch.Tensor, value: float, max_value: float = 5.0) -> Image.Image:
+def add_heatmap_patch(
+    img_tensor: torch.Tensor,
+    bbox: torch.Tensor,
+    value: float,
+    max_value: float = 5.0,
+) -> Image.Image:
     """Apply a heatmap tint to the patch region without drawing a solid box."""
     np_img = img_tensor.permute(1, 2, 0).clamp(0, 1).numpy()
     h, w, _ = np_img.shape
@@ -436,6 +466,106 @@ def add_heatmap_patch(img_tensor: torch.Tensor, bbox: torch.Tensor, value: float
     patch = np_img[y0:y1, x0:x1, :]
     np_img[y0:y1, x0:x1, :] = (1 - alpha) * patch + alpha * color
     return Image.fromarray((np_img * 255).astype("uint8"))
+
+
+def extract_patch_image(
+    img_tensor: torch.Tensor,
+    bbox: torch.Tensor,
+    upscale: int = 128,
+) -> Image.Image:
+    """Crop a patch from the denormalized tensor and optionally upscale it."""
+
+    np_img = img_tensor.permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+    h, w, _ = np_img.shape
+    x0, y0, x1, y1 = [int(v) for v in bbox.tolist()]
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    if x1 <= x0 or y1 <= y0:
+        patch = np_img
+    else:
+        patch = np_img[y0:y1, x0:x1, :]
+    pil_patch = Image.fromarray((patch * 255).astype("uint8"))
+    if upscale and (pil_patch.width < upscale or pil_patch.height < upscale):
+        if hasattr(Image, "Resampling"):
+            pil_patch = pil_patch.resize((upscale, upscale), resample=Image.Resampling.BILINEAR)
+        else:  # pragma: no cover - Pillow < 9.1 fallback
+            pil_patch = pil_patch.resize((upscale, upscale), resample=Image.BILINEAR)
+    return pil_patch
+
+
+def make_patch_panel(previews: List[Dict[str, Any]], title: str) -> plt.Figure | None:
+    """Assemble a horizontal panel of patch previews."""
+
+    if not previews:
+        return None
+    cols = len(previews)
+    fig, axes = plt.subplots(1, cols, figsize=(3 * cols, 3))
+    if cols == 1:
+        axes = [axes]
+    for ax, preview in zip(axes, previews):
+        ax.imshow(np.asarray(preview["image"]))
+        ax.set_title(preview["caption"], fontsize=8)
+        ax.axis("off")
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout()
+    return fig
+
+
+def prepare_dimension_extreme_visuals(
+    dims: np.ndarray,
+    images: torch.Tensor,
+    bboxes: torch.Tensor,
+    labels: torch.Tensor,
+    pred_labels: torch.Tensor,
+    dataset: str,
+    class_names: List[str] | None = None,
+    top_k: int = 6,
+) -> Dict[str, Dict[str, Any]]:
+    """Select sample patches for the lowest/highest dimension tokens."""
+
+    visuals: Dict[str, Dict[str, Any]] = {}
+    if dims.size == 0 or images.numel() == 0 or bboxes.numel() == 0:
+        return visuals
+    valid_mask = np.isfinite(dims)
+    valid_indices = np.where(valid_mask)[0]
+    if valid_indices.size == 0:
+        return visuals
+    sorted_indices = valid_indices[np.argsort(dims[valid_indices])]
+    if sorted_indices.size == 0:
+        return visuals
+    k = min(top_k, sorted_indices.size)
+    low_indices = sorted_indices[:k]
+    high_indices = sorted_indices[-k:]
+    denorm = denormalize_images(images, dataset).cpu()
+
+    labels_cpu = labels.cpu() if isinstance(labels, torch.Tensor) else labels
+    preds_cpu = pred_labels.cpu() if isinstance(pred_labels, torch.Tensor) else pred_labels
+
+    def resolve_name(index: int, tensor: torch.Tensor, fallback: str) -> str:
+        if not isinstance(tensor, torch.Tensor) or tensor.numel() <= index:
+            return fallback
+        sample = tensor[index]
+        if sample.dim() == 0:
+            value = int(sample.item())
+            if class_names and 0 <= value < len(class_names):
+                return class_names[value]
+            return str(value)
+        return fallback
+
+    def build_previews(indices: np.ndarray, label: str) -> Dict[str, Any]:
+        previews: List[Dict[str, Any]] = []
+        for idx in indices:
+            patch_img = extract_patch_image(denorm[idx], bboxes[idx])
+            lbl = resolve_name(idx, labels_cpu, "-")
+            pred = resolve_name(idx, preds_cpu, "-" if preds_cpu is not None else "")
+            caption = f"idx {idx} | dim {dims[idx]:.2f} | lbl {lbl} | pred {pred}"
+            previews.append({"image": patch_img, "caption": caption})
+        panel = make_patch_panel(previews, f"{label} dimension patches")
+        return {"previews": previews, "figure": panel}
+
+    visuals["low"] = build_previews(low_indices, "Low") if low_indices.size > 0 else {}
+    visuals["high"] = build_previews(high_indices[::-1], "High") if high_indices.size > 0 else {}
+    return visuals
 
 
 # --------------------------------------------------------------------------- #
@@ -623,7 +753,11 @@ def plot_progress(
     plt.close(fig)
 
 
-def make_embedding_figure_3d(coords3d: np.ndarray, dims: np.ndarray, title: str = "CLS embeddings (PCA 3D)") -> plt.Figure:
+def make_embedding_figure_3d(
+    coords3d: np.ndarray,
+    dims: np.ndarray,
+    title: str = "CLS embeddings (PCA 3D)",
+) -> plt.Figure:
     fig = plt.figure(figsize=(6, 5))
     ax = fig.add_subplot(111, projection="3d")
     sc = ax.scatter(coords3d[:, 0], coords3d[:, 1], coords3d[:, 2], c=dims, cmap="viridis", s=10, alpha=0.85)
@@ -640,19 +774,84 @@ def make_embedding_figure_tsne(coords3d: np.ndarray, dims: np.ndarray) -> plt.Fi
     return make_embedding_figure_3d(coords3d, dims, title="CLS embeddings (t-SNE 3D)")
 
 
+def plot_dimension_histogram(dims: np.ndarray, bins: int = 30) -> plt.Figure | None:
+    """Return a histogram of first-stratum dimensions for the collected tokens."""
+
+    valid = dims[np.isfinite(dims)]
+    if valid.size == 0:
+        return None
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(valid, bins=bins, color="steelblue", edgecolor="black", alpha=0.85)
+    ax.set_xlabel("local dimension estimate")
+    ax.set_ylabel("token count")
+    ax.set_title("Token dimension distribution")
+    fig.tight_layout()
+    return fig
+
+
+def plot_patch_count_curve(image_ids: torch.Tensor | np.ndarray) -> plt.Figure | None:
+    """Plot sorted patch counts per image id to reveal sampling coverage."""
+
+    if isinstance(image_ids, torch.Tensor):
+        ids = image_ids.view(-1).cpu().numpy()
+    else:
+        ids = np.asarray(image_ids)
+    if ids.size == 0:
+        return None
+    unique_ids, counts = np.unique(ids, return_counts=True)
+    if unique_ids.size == 0:
+        return None
+    order = np.argsort(counts)[::-1]
+    sorted_counts = counts[order]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(range(len(sorted_counts)), sorted_counts, marker="o", linewidth=1.2)
+    ax.set_xlabel("image rank (sorted by patch count)")
+    ax.set_ylabel("patch tokens collected")
+    ax.set_title("Patches per image (sorted)")
+    fig.tight_layout()
+    return fig
+
+
+def plot_dimension_radius_scatter(results: List[Dict[str, List[float]]]) -> plt.Figure | None:
+    """Scatter of first-layer radii vs estimated slopes (dimensions)."""
+
+    radii, dims = [], []
+    for res in results:
+        if not res or not res.get("dimensions") or not res.get("strat_radii"):
+            continue
+        dim_val = res["dimensions"][0]
+        radius_val = res["strat_radii"][0]
+        if not np.isfinite(dim_val) or radius_val <= 0:
+            continue
+        radii.append(radius_val)
+        dims.append(dim_val)
+    if not radii:
+        return None
+    radii_np = np.array(radii)
+    dims_np = np.array(dims)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.scatter(np.log10(radii_np), dims_np, s=18, alpha=0.7)
+    ax.set_xlabel("log10 radius")
+    ax.set_ylabel("estimated slope (dimension)")
+    ax.set_title("Slope vs radius per token")
+    fig.tight_layout()
+    return fig
+
+
 def select_irregular_images(
     images: torch.Tensor,
     labels: torch.Tensor,
     fiber_results: List[Dict[str, List[float]]],
     dataset: str,
     bboxes: torch.Tensor,
-    neighborhood_dims: List[float] | None = None,
-    image_ids: torch.Tensor | None = None,
-    class_names: List[str] | None = None,
-    image_mean_dims: dict | None = None,
-    pred_labels: torch.Tensor | None = None,
+    neighborhood_dims: Optional[List[float]] = None,
+    image_ids: Optional[torch.Tensor] = None,
+    class_names: Optional[List[str]] = None,
+    image_mean_dims: Optional[Dict[int, float]] = None,
+    pred_labels: Optional[torch.Tensor] = None,
     top_k: int = 12,
-):
+) -> List[Dict[str, Any]]:
+    """Select the top-k irregular tokens and assemble visualization metadata."""
     irregs = []
     for idx, res in enumerate(fiber_results):
         if not res or not res["pvalues"]:
@@ -756,25 +955,29 @@ def main():
         else Path(f"tinyvit_runs/fiber_bundle_{args.dataset.lower()}")
     )
     embed_dir = base_dir / "embeddings"
+    analysis_dir = base_dir / "fiber_analysis"
     if is_main:
         base_dir.mkdir(parents=True, exist_ok=True)
         embed_dir.mkdir(parents=True, exist_ok=True)
+        analysis_dir.mkdir(parents=True, exist_ok=True)
     accelerator.wait_for_everyone()
 
     seed_everything(args.seed + accelerator.process_index)
     if is_main and args.wandb:
-        try:
-            import wandb
-
-            wandb.init(
-                project=args.project,
-                name=args.run_name,
-                config=vars(args),
-                mode=os.environ.get("WANDB_MODE", "online"),
-            )
-        except Exception as e:
-            print(f"[wandb] init failed: {e}")
+        if wandb is None:
+            print("[wandb] init failed: wandb is not installed")
             args.wandb = False
+        else:
+            try:
+                wandb.init(
+                    project=args.project,
+                    name=args.run_name,
+                    config=vars(args),
+                    mode=os.environ.get("WANDB_MODE", "online"),
+                )
+            except Exception as e:
+                print(f"[wandb] init failed: {e}")
+                args.wandb = False
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -805,6 +1008,7 @@ def main():
         device=device,
     )
     # Resolve class names (fallback to known semantic lists when available)
+
     def _resolve_classes(ds, dataset_name: str):
         name = dataset_name.upper()
         known = {
@@ -863,7 +1067,6 @@ def main():
 
     train_history: List[Dict[str, float]] = []
     fiber_history: List[Dict[str, float]] = []
-    final_coords = None
     final_dims = None
     final_coords_3d = None
     final_tsne_3d = None
@@ -906,10 +1109,8 @@ def main():
                 f"train {train_loss:.4f}/{train_acc:.4f} | "
                 f"val {eval_loss:.4f}/{eval_acc:.4f}"
             )
-            if args.wandb:
+            if args.wandb and wandb is not None:
                 try:
-                    import wandb
-
                     wandb.log(
                         {
                             "epoch": epoch,
@@ -927,11 +1128,12 @@ def main():
             accelerator.wait_for_everyone()
             local_max = max(1, math.ceil(args.max_tokens / world_size))
             unwrapped = accelerator.unwrap_model(model)
+            patch_size_value = unwrapped.patch_embed.patch_size
             embeddings, labels, images, bboxes, img_ids, pred_labels = collect_patch_tokens(
                 unwrapped,
                 test_loader,
                 accelerator.device,
-                patch_size=model.module.patch_embed.patch_size if hasattr(model, "module") else model.patch_embed.patch_size,
+                patch_size=patch_size_value,
                 max_tokens=local_max,
             )
             all_embeddings = accelerator.gather_for_metrics(embeddings.to(accelerator.device))
@@ -996,10 +1198,55 @@ def main():
                     [res["dimensions"][0] if res["dimensions"] else np.nan for res in fiber_results]
                 )
 
-                if args.wandb:
-                    try:
-                        import wandb
+                analysis_paths: Dict[str, Path] = {}
+                preview_data: Dict[str, List[Dict[str, Any]]] = {}
 
+                dim_hist_fig = plot_dimension_histogram(final_dims)
+                if dim_hist_fig is not None:
+                    hist_path = analysis_dir / f"epoch_{epoch:03d}_dim_hist.png"
+                    dim_hist_fig.savefig(hist_path, dpi=200)
+                    plt.close(dim_hist_fig)
+                    analysis_paths["fiber/dim_histogram"] = hist_path
+
+                patch_count_fig = plot_patch_count_curve(all_img_ids)
+                if patch_count_fig is not None:
+                    patch_path = analysis_dir / f"epoch_{epoch:03d}_patch_count.png"
+                    patch_count_fig.savefig(patch_path, dpi=200)
+                    plt.close(patch_count_fig)
+                    analysis_paths["fiber/patch_count_curve"] = patch_path
+
+                slope_fig = plot_dimension_radius_scatter(fiber_results)
+                if slope_fig is not None:
+                    slope_path = analysis_dir / f"epoch_{epoch:03d}_slope_radius.png"
+                    slope_fig.savefig(slope_path, dpi=200)
+                    plt.close(slope_fig)
+                    analysis_paths["fiber/dim_radius_scatter"] = slope_path
+
+                extreme_visuals = prepare_dimension_extreme_visuals(
+                    final_dims,
+                    all_images,
+                    all_bboxes,
+                    all_labels,
+                    all_pred_labels,
+                    dataset=args.dataset,
+                    class_names=class_names,
+                    top_k=4,
+                )
+                for group_name in ("low", "high"):
+                    group = extreme_visuals.get(group_name)
+                    if not group:
+                        continue
+                    if group.get("figure") is not None:
+                        panel_path = analysis_dir / f"epoch_{epoch:03d}_{group_name}_dim_panel.png"
+                        group["figure"].savefig(panel_path, dpi=200)
+                        plt.close(group["figure"])
+                        key = f"embeddings/{group_name}_dim_panel"
+                        analysis_paths[key] = panel_path
+                    if group.get("previews"):
+                        preview_data[group_name] = group["previews"]
+
+                if args.wandb and wandb is not None:
+                    try:
                         fig3d = make_embedding_figure_3d(final_coords_3d, final_dims)
                         log_dict = {
                             "epoch": epoch,
@@ -1021,15 +1268,33 @@ def main():
                             )
                             plt.close(fig_tsne)
 
+                        for key, path in analysis_paths.items():
+                            log_dict[key] = wandb.Image(str(path))
+
+                        if preview_data.get("low"):
+                            log_dict["embeddings/low_dim_patches"] = [
+                                wandb.Image(item["image"], caption=item["caption"])
+                                for item in preview_data["low"]
+                            ]
+                        if preview_data.get("high"):
+                            log_dict["embeddings/high_dim_patches"] = [
+                                wandb.Image(item["image"], caption=item["caption"])
+                                for item in preview_data["high"]
+                            ]
+
                         wandb.log(log_dict)
 
+                        neighborhood_dims_vals = [
+                            res["dimensions"][0] if res["dimensions"] else float("nan")
+                            for res in fiber_results
+                        ]
                         irregular = select_irregular_images(
                             all_images,
                             all_labels,
                             fiber_results,
                             args.dataset,
                             all_bboxes,
-                            neighborhood_dims=[res["dimensions"][0] if res["dimensions"] else float("nan") for res in fiber_results],
+                            neighborhood_dims=neighborhood_dims_vals,
                             image_ids=all_img_ids,
                             class_names=class_names,
                             pred_labels=all_pred_labels,
@@ -1037,7 +1302,6 @@ def main():
                             top_k=12,
                         )
                         if irregular:
-                            # Add patch-level predicted class for each irregular region
                             unwrapped_model = accelerator.unwrap_model(model)
                             for item in irregular:
                                 pred_lbl, pred_name = predict_patch_class(
@@ -1052,25 +1316,29 @@ def main():
                                 item["patch_pred_label"] = pred_lbl
                                 item["patch_pred_label_name"] = pred_name
 
-                            wandb.log(
-                                {
-                                    "embeddings/irregular_samples": [
-                                        wandb.Image(
-                                            add_heatmap_patch(item["img"], item["bbox"], item["irregularity"]),
-                                            caption=(
-                                                f"token {item['token_id']}, "
-                                                f"class {item.get('label_name', item['label'])}, "
-                                                f"pred {item.get('pred_label_name', item['pred_label'])}, "
-                                                f"patch_pred {item.get('patch_pred_label_name', item.get('patch_pred_label', ''))}, "
-                                                f"dim {item['dim']:.2f}, "
-                                                f"img_mean_dim {item['image_mean_dim']:.2f}, "
-                                                f"irr {item['irregularity']:.2f}"
-                                            ),
-                                        )
-                                        for item in irregular
-                                    ]
-                                }
-                            )
+                            heatmap_images = []
+                            for item in irregular:
+                                patch_pred_label = item.get(
+                                    "patch_pred_label_name",
+                                    item.get("patch_pred_label", ""),
+                                )
+                                caption = (
+                                    f"token {item['token_id']}, "
+                                    f"class {item.get('label_name', item['label'])}, "
+                                    f"pred {item.get('pred_label_name', item['pred_label'])}, "
+                                    f"patch_pred {patch_pred_label}, "
+                                    f"dim {item['dim']:.2f}, "
+                                    f"img_mean_dim {item['image_mean_dim']:.2f}, "
+                                    f"irr {item['irregularity']:.2f}"
+                                )
+                                heatmap_images.append(
+                                    wandb.Image(
+                                        add_heatmap_patch(item["img"], item["bbox"], item["irregularity"]),
+                                        caption=caption,
+                                    )
+                                )
+
+                            wandb.log({"embeddings/irregular_samples": heatmap_images})
                     except Exception as e:
                         print(f"[wandb] logging failed: {e}")
 
@@ -1091,10 +1359,8 @@ def main():
             )
             print(f"Saved summary plot → {base_dir/'fiber_bundle_summary.png'}")
 
-        if args.wandb:
+        if args.wandb and wandb is not None:
             try:
-                import wandb
-
                 wandb.finish()
             except Exception:
                 pass
