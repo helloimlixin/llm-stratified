@@ -923,17 +923,26 @@ def make_embedding_figure_tsne(coords3d: np.ndarray, dims: np.ndarray) -> plt.Fi
     return make_embedding_figure_3d(coords3d, dims, title="CLS embeddings (t-SNE 3D)")
 
 
-def plot_dimension_histogram(dims: np.ndarray, bins: int = 30) -> plt.Figure | None:
-    """Return a histogram of first-stratum dimensions for the collected tokens."""
+def plot_patches_per_token_index(bboxes: torch.Tensor) -> plt.Figure | None:
+    """Plot number of patches per token position (patch slot), sorted by count."""
 
-    valid = dims[np.isfinite(dims)]
-    if valid.size == 0:
+    if bboxes is None or bboxes.numel() == 0:
         return None
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(valid, bins=bins, color="steelblue", edgecolor="black", alpha=0.85)
-    ax.set_xlabel("local dimension estimate")
-    ax.set_ylabel("token count")
-    ax.set_title("Token dimension distribution")
+    b_np = bboxes.cpu().numpy()
+    # identify token slot by (x0, y0) position of the patch
+    slots = b_np[:, :2].astype(int)
+    # map unique slots to indices
+    uniq, inv = np.unique(slots, axis=0, return_inverse=True)
+    counts = np.bincount(inv, minlength=uniq.shape[0])
+    order = np.argsort(-counts)
+    idx_sorted = np.arange(counts.size)[order]
+    counts_sorted = counts[order]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(idx_sorted, counts_sorted, color="steelblue", edgecolor="black", alpha=0.85, width=0.8)
+    ax.set_xlabel("token index (patch slot, sorted by count)")
+    ax.set_ylabel("number of patches")
+    ax.set_title("Patches per token position")
     fig.tight_layout()
     return fig
 
@@ -995,6 +1004,40 @@ def plot_dimension_radius_scatter(results: List[Dict[str, List[float]]]) -> plt.
     ax.set_title("log(dim) vs radius per token")
     fig.tight_layout()
     return fig
+
+
+def save_top_token_index_patches(
+    images: torch.Tensor,
+    bboxes: torch.Tensor,
+    analysis_dir: Path,
+    prefix: str,
+    top_k: int = 6,
+    dataset: str = "CIFAR10",
+) -> Dict[str, Path]:
+    """Save one patch crop for each of the top-K token positions by frequency."""
+
+    paths: Dict[str, Path] = {}
+    if images.numel() == 0 or bboxes.numel() == 0:
+        return paths
+    b_np = bboxes.cpu().numpy()
+    slots = b_np[:, :2].astype(int)
+    uniq, inv = np.unique(slots, axis=0, return_inverse=True)
+    counts = np.bincount(inv, minlength=uniq.shape[0])
+    order = np.argsort(-counts)
+    denorm_images = denormalize_images(images, dataset).cpu()
+
+    for rank, slot_idx in enumerate(order[:top_k]):
+        locs = np.where(inv == slot_idx)[0]
+        if locs.size == 0:
+            continue
+        idx_tok = int(locs[0])
+        if idx_tok >= len(bboxes) or idx_tok >= len(denorm_images):
+            continue
+        patch_img = extract_patch_image(denorm_images[idx_tok], bboxes[idx_tok])
+        patch_path = analysis_dir / f"{prefix}_top_token_slot_{rank}_idx_{slot_idx}.png"
+        patch_img.save(patch_path)
+        paths[f"top_token_slot_{rank}_idx_{slot_idx}"] = patch_path
+    return paths
 
 
 def plot_token_radius_curve_from_embeddings(
@@ -1493,12 +1536,24 @@ def main():
                 analysis_paths: Dict[str, Path] = {}
                 preview_data: Dict[str, List[Dict[str, Any]]] = {}
 
-                dim_hist_fig = plot_dimension_histogram(final_dims)
-                if dim_hist_fig is not None:
-                    hist_path = analysis_dir / f"epoch_{epoch:03d}_dim_hist.png"
-                    dim_hist_fig.savefig(hist_path, dpi=200)
-                    plt.close(dim_hist_fig)
-                    analysis_paths["fiber/dim_histogram"] = hist_path
+                token_slot_fig = plot_patches_per_token_index(all_bboxes)
+                if token_slot_fig is not None:
+                    slot_path = analysis_dir / f"epoch_{epoch:03d}_token_slot_counts.png"
+                    token_slot_fig.savefig(slot_path, dpi=200)
+                    plt.close(token_slot_fig)
+                    analysis_paths["fiber/token_slot_counts"] = slot_path
+
+                # Top token-slot patch previews
+                top_token_slot_paths = save_top_token_index_patches(
+                    all_images,
+                    all_bboxes,
+                    analysis_dir,
+                    prefix=f"epoch_{epoch:03d}",
+                    top_k=6,
+                    dataset=args.dataset,
+                )
+                for key, path in top_token_slot_paths.items():
+                    analysis_paths[f"token_patch_top/{key}"] = path
 
                 patch_count_fig = plot_patch_count_curve(final_dims)
                 if patch_count_fig is not None:
