@@ -96,93 +96,93 @@ Here are the visualizations of the training experiment with Fiber Bundle Tests.
 
 #### Epoch 000
 
-![](runs/fiber_test_stl10_96/class_dims_epoch_000.png)
+![](imgs/class_dims/class_dims_epoch_000.png)
 
 #### Epoch 049
 
-![](runs/fiber_test_stl10_96/class_dims_epoch_049.png)
+![](imgs/class_dims/class_dims_epoch_049.png)
 
 #### Epoch 099
 
-![](runs/fiber_test_stl10_96/class_dims_epoch_099.png)
+![](imgs/class_dims/class_dims_epoch_099.png)
 
 #### Epoch 149
 
-![](runs/fiber_test_stl10_96/class_dims_epoch_149.png)
+![](imgs/class_dims/class_dims_epoch_149.png)
 
 #### Epoch 199
 
-![](runs/fiber_test_stl10_96/class_dims_epoch_199.png)
+![](imgs/class_dims/class_dims_epoch_199.png)
 
 ### Fiber bundle summary (epoch progression)
 
-> These plots are stored under `wandb/run-20251219_105025-585am4hi/files/media/images/fiber/` and logged at the checkpoint cadence. We show the same checkpoints as the class-wise summaries for easier comparison.
+> These plots were copied into `imgs/fiber/` so the markdown renders cleanly on GitHub. We show the same checkpoints as the class-wise summaries for easier comparison.
 
 #### Fiber / token slot counts
 
 ##### Epoch 000
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/token_slot_counts_1_0b599cfbd27b64de6295.png)
+![](imgs/fiber/token_slot_counts_1_0b599cfbd27b64de6295.png)
 
 ##### Epoch 049
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/token_slot_counts_60_0b599cfbd27b64de6295.png)
+![](imgs/fiber/token_slot_counts_60_0b599cfbd27b64de6295.png)
 
 ##### Epoch 099
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/token_slot_counts_120_0b599cfbd27b64de6295.png)
+![](imgs/fiber/token_slot_counts_120_0b599cfbd27b64de6295.png)
 
 ##### Epoch 149
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/token_slot_counts_180_0b599cfbd27b64de6295.png)
+![](imgs/fiber/token_slot_counts_180_0b599cfbd27b64de6295.png)
 
 ##### Epoch 199
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/token_slot_counts_240_0b599cfbd27b64de6295.png)
+![](imgs/fiber/token_slot_counts_240_0b599cfbd27b64de6295.png)
 
 #### Fiber / patch count curve
 
 ##### Epoch 000
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/patch_count_curve_1_020eae0913c404cb4e40.png)
+![](imgs/fiber/patch_count_curve_1_020eae0913c404cb4e40.png)
 
 ##### Epoch 049
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/patch_count_curve_60_622d0ae45edebb5618d3.png)
+![](imgs/fiber/patch_count_curve_60_622d0ae45edebb5618d3.png)
 
 ##### Epoch 099
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/patch_count_curve_120_ab38bf9950b085094894.png)
+![](imgs/fiber/patch_count_curve_120_ab38bf9950b085094894.png)
 
 ##### Epoch 149
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/patch_count_curve_180_1e5987e4bf2a22319ab6.png)
+![](imgs/fiber/patch_count_curve_180_1e5987e4bf2a22319ab6.png)
 
 ##### Epoch 199
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/patch_count_curve_240_677db3a3067f50c2f646.png)
+![](imgs/fiber/patch_count_curve_240_677db3a3067f50c2f646.png)
 
 #### Fiber / dim–radius scatter
 
 ##### Epoch 000
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/dim_radius_scatter_1_7b8863331918209b4b87.png)
+![](imgs/fiber/dim_radius_scatter_1_7b8863331918209b4b87.png)
 
 ##### Epoch 049
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/dim_radius_scatter_60_e18da662e662e0d284dc.png)
+![](imgs/fiber/dim_radius_scatter_60_e18da662e662e0d284dc.png)
 
 ##### Epoch 099
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/dim_radius_scatter_120_7f1715ea2971a6ea2591.png)
+![](imgs/fiber/dim_radius_scatter_120_7f1715ea2971a6ea2591.png)
 
 ##### Epoch 149
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/dim_radius_scatter_180_6c304ee05650822fb9ca.png)
+![](imgs/fiber/dim_radius_scatter_180_6c304ee05650822fb9ca.png)
 
 ##### Epoch 199
 
-![](wandb/run-20251219_105025-585am4hi/files/media/images/fiber/dim_radius_scatter_240_1d7fc831b7ee3d935a65.png)
+![](imgs/fiber/dim_radius_scatter_240_1d7fc831b7ee3d935a65.png)
 
 ### Fiber analysis panels (selected checkpoints)
 
@@ -198,31 +198,31 @@ For each checkpoint epoch, these are available under `runs/fiber_test_stl10_96/f
 
 | token slot counts | patch count | slope vs radius |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_token_slot_counts.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_patch_count.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_slope_radius.png) |
+| ![](imgs/fiber_analysis/epoch_000_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_000_patch_count.png) | ![](imgs/fiber_analysis/epoch_000_slope_radius.png) |
 
 | low-dim panel | high-dim panel |
 |---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_low_dim_panel.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_high_dim_panel.png) |
+| ![](imgs/fiber_analysis/epoch_000_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_000_high_dim_panel.png) |
 
 #### Epoch 099
 
 | token slot counts | patch count | slope vs radius |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_token_slot_counts.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_patch_count.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_slope_radius.png) |
+| ![](imgs/fiber_analysis/epoch_099_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_099_patch_count.png) | ![](imgs/fiber_analysis/epoch_099_slope_radius.png) |
 
 | low-dim panel | high-dim panel |
 |---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_low_dim_panel.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_high_dim_panel.png) |
+| ![](imgs/fiber_analysis/epoch_099_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_099_high_dim_panel.png) |
 
 #### Epoch 199
 
 | token slot counts | patch count | slope vs radius |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_token_slot_counts.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_patch_count.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_slope_radius.png) |
+| ![](imgs/fiber_analysis/epoch_199_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_199_patch_count.png) | ![](imgs/fiber_analysis/epoch_199_slope_radius.png) |
 
 | low-dim panel | high-dim panel |
 |---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_low_dim_panel.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_high_dim_panel.png) |
+| ![](imgs/fiber_analysis/epoch_199_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_199_high_dim_panel.png) |
 
 ---
 
@@ -237,51 +237,51 @@ These plots are already saved under `runs/fiber_test_stl10_96/fiber_analysis/` a
 
 | token_radius/low_dim_token | token_radius/mid_dim_token | token_radius/high_dim_token |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_low_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_mid_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_000_high_dim_token_radius.png) |
+| ![](imgs/fiber_analysis/epoch_000_low_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_000_mid_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_000_high_dim_token_radius.png) |
 
 | token_patch/low_dim_token | token_patch/mid_dim_token | token_patch/high_dim_token |
 |---|---|---|
-| <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_000_low_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_000_mid_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_000_high_dim_token_patch.png" width="320"> |
+| <img src="imgs/fiber_analysis/epoch_000_low_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_000_mid_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_000_high_dim_token_patch.png" width="320"> |
 
 ### Epoch 049
 
 | token_radius/low_dim_token | token_radius/mid_dim_token | token_radius/high_dim_token |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_049_low_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_049_mid_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_049_high_dim_token_radius.png) |
+| ![](imgs/fiber_analysis/epoch_049_low_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_049_mid_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_049_high_dim_token_radius.png) |
 
 | token_patch/low_dim_token | token_patch/mid_dim_token | token_patch/high_dim_token |
 |---|---|---|
-| <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_049_low_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_049_mid_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_049_high_dim_token_patch.png" width="320"> |
+| <img src="imgs/fiber_analysis/epoch_049_low_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_049_mid_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_049_high_dim_token_patch.png" width="320"> |
 
 ### Epoch 099
 
 | token_radius/low_dim_token | token_radius/mid_dim_token | token_radius/high_dim_token |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_low_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_mid_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_099_high_dim_token_radius.png) |
+| ![](imgs/fiber_analysis/epoch_099_low_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_099_mid_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_099_high_dim_token_radius.png) |
 
 | token_patch/low_dim_token | token_patch/mid_dim_token | token_patch/high_dim_token |
 |---|---|---|
-| <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_099_low_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_099_mid_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_099_high_dim_token_patch.png" width="320"> |
+| <img src="imgs/fiber_analysis/epoch_099_low_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_099_mid_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_099_high_dim_token_patch.png" width="320"> |
 
 ### Epoch 149
 
 | token_radius/low_dim_token | token_radius/mid_dim_token | token_radius/high_dim_token |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_149_low_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_149_mid_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_149_high_dim_token_radius.png) |
+| ![](imgs/fiber_analysis/epoch_149_low_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_149_mid_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_149_high_dim_token_radius.png) |
 
 | token_patch/low_dim_token | token_patch/mid_dim_token | token_patch/high_dim_token |
 |---|---|---|
-| <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_149_low_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_149_mid_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_149_high_dim_token_patch.png" width="320"> |
+| <img src="imgs/fiber_analysis/epoch_149_low_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_149_mid_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_149_high_dim_token_patch.png" width="320"> |
 
 ### Epoch 199
 
 | token_radius/low_dim_token | token_radius/mid_dim_token | token_radius/high_dim_token |
 |---|---|---|
-| ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_low_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_mid_dim_token_radius.png) | ![](runs/fiber_test_stl10_96/fiber_analysis/epoch_199_high_dim_token_radius.png) |
+| ![](imgs/fiber_analysis/epoch_199_low_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_199_mid_dim_token_radius.png) | ![](imgs/fiber_analysis/epoch_199_high_dim_token_radius.png) |
 
 | token_patch/low_dim_token | token_patch/mid_dim_token | token_patch/high_dim_token |
 |---|---|---|
-| <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_199_low_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_199_mid_dim_token_patch.png" width="320"> | <img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_199_high_dim_token_patch.png" width="320"> |
+| <img src="imgs/fiber_analysis/epoch_199_low_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_199_mid_dim_token_patch.png" width="320"> | <img src="imgs/fiber_analysis/epoch_199_high_dim_token_patch.png" width="320"> |
 
 ---
 
@@ -296,51 +296,51 @@ These are the “low/high dimension patch panels” saved as:
 
 #### embeddings/low_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_000_low_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_000_low_dim_panel.png" width="1400">
 
 #### embeddings/high_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_000_high_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_000_high_dim_panel.png" width="1400">
 
 ### Epoch 049
 
 #### embeddings/low_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_049_low_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_049_low_dim_panel.png" width="1400">
 
 #### embeddings/high_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_049_high_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_049_high_dim_panel.png" width="1400">
 
 ### Epoch 099
 
 #### embeddings/low_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_099_low_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_099_low_dim_panel.png" width="1400">
 
 #### embeddings/high_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_099_high_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_099_high_dim_panel.png" width="1400">
 
 ### Epoch 149
 
 #### embeddings/low_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_149_low_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_149_low_dim_panel.png" width="1400">
 
 #### embeddings/high_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_149_high_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_149_high_dim_panel.png" width="1400">
 
 ### Epoch 199
 
 #### embeddings/low_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_199_low_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_199_low_dim_panel.png" width="1400">
 
 #### embeddings/high_dim_patches
 
-<img src="runs/fiber_test_stl10_96/fiber_analysis/epoch_199_high_dim_panel.png" width="1400">
+<img src="imgs/fiber_analysis/epoch_199_high_dim_panel.png" width="1400">
 
 ---
 
@@ -348,7 +348,7 @@ These are the “low/high dimension patch panels” saved as:
 
 These images are saved under:
 
-- `wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_*.png`
+- `imgs/embeddings/irregular_samples_*.png`
 
 Each epoch snapshot below shows 12 “most irregular” samples (with heatmap overlays).
 
@@ -356,41 +356,41 @@ Each epoch snapshot below shows 12 “most irregular” samples (with heatmap ov
 
 | | | | |
 |---|---|---|---|
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_1728b27133f8bd2f06e5.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_f33a8414b168b7447e63.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_80e5d27f1301ce6f01ba.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_f6de53f6bbf79d2624b7.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_c455691d12a8e6a89590.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_51081fe164e0281e7118.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_3d2a8db80612a74d1e86.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_c9e9b17095da73e4f7fc.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_385749c30c3f2ceb1389.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_756cbc30a2402dd7d614.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_77d65d07ff54de13c172.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_2_97e20d2d34b36c283bcb.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_2_1728b27133f8bd2f06e5.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_f33a8414b168b7447e63.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_80e5d27f1301ce6f01ba.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_f6de53f6bbf79d2624b7.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_2_c455691d12a8e6a89590.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_51081fe164e0281e7118.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_3d2a8db80612a74d1e86.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_c9e9b17095da73e4f7fc.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_2_385749c30c3f2ceb1389.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_756cbc30a2402dd7d614.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_77d65d07ff54de13c172.png" width="260"> | <img src="imgs/embeddings/irregular_samples_2_97e20d2d34b36c283bcb.png" width="260"> |
 
 ### Epoch 049
 
 | | | | |
 |---|---|---|---|
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_fce677509b0ea54138b8.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_048ba756127abb810125.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_78894caa5b2fe4188633.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_b2c09e6cd04ae08c0818.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_4ec4160a18bae8357bbe.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_492f82945f8d3bc03aac.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_e58a8c41303ac8ae224e.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_e888fbdaa5f52a606d99.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_38e6f48c76ef8a14b475.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_25b8de85b29abb6ae5fe.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_363093779598a1b107ea.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_61_7780ebd724f59d2d3754.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_61_fce677509b0ea54138b8.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_048ba756127abb810125.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_78894caa5b2fe4188633.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_b2c09e6cd04ae08c0818.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_61_4ec4160a18bae8357bbe.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_492f82945f8d3bc03aac.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_e58a8c41303ac8ae224e.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_e888fbdaa5f52a606d99.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_61_38e6f48c76ef8a14b475.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_25b8de85b29abb6ae5fe.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_363093779598a1b107ea.png" width="260"> | <img src="imgs/embeddings/irregular_samples_61_7780ebd724f59d2d3754.png" width="260"> |
 
 ### Epoch 099
 
 | | | | |
 |---|---|---|---|
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_389c6bdcb433bf59ad6e.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_d113ef62447d768130e5.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_add067fdc65540adbdbf.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_3a7dd832b29ffde969d3.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_2f2f94fd67affdb6bcda.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_79c256680b6597a79366.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_1d7d37b2d6e9065d8496.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_3a79d55b524db5073468.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_b0b8a9f0a51f34aa4577.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_7acfd97704281e76bd73.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_1b2f32458d017842efb0.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_121_cecbf979c5e017570487.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_121_389c6bdcb433bf59ad6e.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_d113ef62447d768130e5.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_add067fdc65540adbdbf.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_3a7dd832b29ffde969d3.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_121_2f2f94fd67affdb6bcda.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_79c256680b6597a79366.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_1d7d37b2d6e9065d8496.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_3a79d55b524db5073468.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_121_b0b8a9f0a51f34aa4577.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_7acfd97704281e76bd73.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_1b2f32458d017842efb0.png" width="260"> | <img src="imgs/embeddings/irregular_samples_121_cecbf979c5e017570487.png" width="260"> |
 
 ### Epoch 149
 
 | | | | |
 |---|---|---|---|
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_6d0e003a2f7f7bdc1404.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_350482a5be6cf8557a6f.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_392a09fc7434e7baf066.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_47de9816361c723cae27.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_46134c74f7b261ae41e4.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_6cb4abb9f41ce11571e3.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_dfd00966bc58a382b3e9.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_8dc0853d188c5f1a93ea.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_4426555b624b3b3dabec.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_c1f7c92264b62bd1f541.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_ed479457c2f820531b65.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_181_84620e8b321a86af9256.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_181_6d0e003a2f7f7bdc1404.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_350482a5be6cf8557a6f.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_392a09fc7434e7baf066.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_47de9816361c723cae27.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_181_46134c74f7b261ae41e4.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_6cb4abb9f41ce11571e3.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_dfd00966bc58a382b3e9.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_8dc0853d188c5f1a93ea.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_181_4426555b624b3b3dabec.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_c1f7c92264b62bd1f541.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_ed479457c2f820531b65.png" width="260"> | <img src="imgs/embeddings/irregular_samples_181_84620e8b321a86af9256.png" width="260"> |
 
 ### Epoch 199
 
 | | | | |
 |---|---|---|---|
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_88e58f05a40572feee76.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_8b5f4bf7369cf4aa6710.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_bef125e35f62ca152853.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_3075500680d1bd160616.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_860c5275f278f4a95f98.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_205dcee0bcbdce389067.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_ddb9681fda876f67751c.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_712664d132387b105c0f.png" width="260"> |
-| <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_04ab529252386e4f3177.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_56a2323f2beda2a73e0c.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_0ed7bbf7e4f0a1fd4e8e.png" width="260"> | <img src="wandb/run-20251219_105025-585am4hi/files/media/images/embeddings/irregular_samples_241_24fa7e397a114f352cf9.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_241_88e58f05a40572feee76.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_8b5f4bf7369cf4aa6710.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_bef125e35f62ca152853.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_3075500680d1bd160616.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_241_860c5275f278f4a95f98.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_205dcee0bcbdce389067.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_ddb9681fda876f67751c.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_712664d132387b105c0f.png" width="260"> |
+| <img src="imgs/embeddings/irregular_samples_241_04ab529252386e4f3177.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_56a2323f2beda2a73e0c.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_0ed7bbf7e4f0a1fd4e8e.png" width="260"> | <img src="imgs/embeddings/irregular_samples_241_24fa7e397a114f352cf9.png" width="260"> |
 
 
 
