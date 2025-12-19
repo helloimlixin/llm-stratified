@@ -17,7 +17,7 @@ This report summarizes the TinyVIT training experiments on the STL10 dataset, ru
 - **Embed interval**: 10 (fiber/embedding visualizations saved at checkpoint epochs)
 - **Max tokens (for embeddings/visuals)**: 8192
 
-## Reproduction command
+## Example Reproduction Command
 
 ```bash
 python ~/llm-stratified/tinyvit_fiber_bundle.py \
@@ -38,7 +38,7 @@ python ~/llm-stratified/tinyvit_fiber_bundle.py \
 
 ---
 
-## Epoch progression — training metrics
+## Training Metrics
 
 This table records metrics every **20 epochs** (plus the final epoch).
 
@@ -64,7 +64,7 @@ This table records metrics every **20 epochs** (plus the final epoch).
 
 ---
 
-## Epoch progression — fiber diagnostics (checkpoint epochs)
+## Fiber Bundle Diagnostics
 
 Fiber diagnostics are computed and saved at the same checkpoint cadence as `--embed-interval` (here: every 10 epochs, stored as epochs `0, 9, 19, ..., 199`). To match the “every 20 epochs” reporting style, we sample the closest available checkpoint epochs: `0, 19, 39, ..., 199`.
 
@@ -186,54 +186,9 @@ Here are the visualizations of the training experiment with Fiber Bundle Tests.
 
 ![](imgs/fiber/dim_radius_scatter_240_1d7fc831b7ee3d935a65.png)
 
-### Fiber analysis panels (selected checkpoints)
-
-For each checkpoint epoch, these are available under `runs/fiber_test_stl10_96/fiber_analysis/`:
-
-- `epoch_XXX_low_dim_panel.png`, `epoch_XXX_high_dim_panel.png`
-- `epoch_XXX_token_slot_counts.png`
-- `epoch_XXX_patch_count.png`
-- `epoch_XXX_slope_radius.png`
-- token patch/radius previews and top-token examples
-
-#### Epoch 000
-
-| token slot counts | patch count | slope vs radius |
-|---|---|---|
-| ![](imgs/fiber_analysis/epoch_000_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_000_patch_count.png) | ![](imgs/fiber_analysis/epoch_000_slope_radius.png) |
-
-| low-dim panel | high-dim panel |
-|---|---|
-| ![](imgs/fiber_analysis/epoch_000_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_000_high_dim_panel.png) |
-
-#### Epoch 099
-
-| token slot counts | patch count | slope vs radius |
-|---|---|---|
-| ![](imgs/fiber_analysis/epoch_099_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_099_patch_count.png) | ![](imgs/fiber_analysis/epoch_099_slope_radius.png) |
-
-| low-dim panel | high-dim panel |
-|---|---|
-| ![](imgs/fiber_analysis/epoch_099_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_099_high_dim_panel.png) |
-
-#### Epoch 199
-
-| token slot counts | patch count | slope vs radius |
-|---|---|---|
-| ![](imgs/fiber_analysis/epoch_199_token_slot_counts.png) | ![](imgs/fiber_analysis/epoch_199_patch_count.png) | ![](imgs/fiber_analysis/epoch_199_slope_radius.png) |
-
-| low-dim panel | high-dim panel |
-|---|---|
-| ![](imgs/fiber_analysis/epoch_199_low_dim_panel.png) | ![](imgs/fiber_analysis/epoch_199_high_dim_panel.png) |
-
 ---
 
-## Token examples (epoch progression)
-
-These plots are already saved under `runs/fiber_test_stl10_96/fiber_analysis/` as:
-
-- radius curves: `epoch_XXX_{low,mid,high}_dim_token_radius.png`
-- patch previews: `epoch_XXX_{low,mid,high}_dim_token_patch.png`
+## Token examples
 
 ### Epoch 000
 
@@ -287,12 +242,7 @@ These plots are already saved under `runs/fiber_test_stl10_96/fiber_analysis/` a
 
 ---
 
-## Embeddings: low/high-dim patches (epoch progression)
-
-These are the “low/high dimension patch panels” saved as:
-
-- `runs/fiber_test_stl10_96/fiber_analysis/epoch_XXX_low_dim_panel.png`
-- `runs/fiber_test_stl10_96/fiber_analysis/epoch_XXX_high_dim_panel.png`
+## Embeddings: Low/High-Dim Patches
 
 ### Epoch 000
 
@@ -346,11 +296,7 @@ These are the “low/high dimension patch panels” saved as:
 
 ---
 
-## Embeddings: irregular samples (epoch progression)
-
-These images are saved under:
-
-- `imgs/embeddings/irregular_samples_*.png`
+## Embeddings: Irregular Samples
 
 Each epoch snapshot below shows 12 “most irregular” samples (with heatmap overlays).
 
