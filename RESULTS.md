@@ -1,4 +1,4 @@
-# Results (Fiber Bundle) — Epoch Progression
+# Results for Fiber Bundle Tests on TinyVIT
 
 
 ## Run configuration (from captured run config)
