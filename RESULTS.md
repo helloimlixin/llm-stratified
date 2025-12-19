@@ -1,7 +1,9 @@
 # Results for Fiber Bundle Tests on TinyVIT
 
+This report summarizes the TinyVIT training experiments on the STL10 dataset, run with fiber bundle tests every 10 epochs.
 
-## Run configuration (from captured run config)
+
+## Run configuration
 
 - **Script**: `tinyvit_fiber_bundle.py`
 - **Dataset**: `STL10`
