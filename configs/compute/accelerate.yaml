@@ -1,0 +1,5 @@
+# Multi-GPU with HuggingFace Accelerate
+# Launch with: accelerate launch src/train.py compute=accelerate
+mode: accelerate
+use_ddp: false
+use_accelerate: true

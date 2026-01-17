@@ -1,0 +1,4 @@
+# Single GPU configuration
+mode: single
+use_ddp: false
+use_accelerate: false

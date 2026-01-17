@@ -1,0 +1,15 @@
+# No-training volume probe disabled
+enabled: false
+max_tokens: 2048
+vol_min: 8
+vol_max: 64
+ws: 8
+alpha: 0.005
+nstrat: 3
+save_full: false
+progress: false
+viz_images: 16
+viz_patches: 64
+viz_nn_anchors: 3
+viz_nn_k: 8
+

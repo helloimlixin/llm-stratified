@@ -1,0 +1,23 @@
+# @package _global_
+# No-training volume probe: compare volume scaling across
+# 1) ViT token embeddings, 2) patch embeddings, 3) raw pixel patches.
+#
+# This is meant as a baseline for "continuity vs stratification" in image space
+# before any training. Override `data=...` / `model=...` as needed.
+defaults:
+  - override /data: stl10
+  - override /model: tinyvit
+  - override /volume_probe: basic
+  - override /fiber: disabled
+  - override /training: debug  # not used when volume_probe.enabled=true
+
+data:
+  # Keep this small by default; patches per image can be large.
+  subset_test: 64
+  num_workers: 0
+  batch_size_test: 64
+
+model:
+  # 96x96 with patch_size=8 => 12x12=144 patches per image
+  patch_size: 8
+

@@ -1,0 +1,15 @@
+# @package _global_
+# Quick test experiment - minimal epochs for testing
+defaults:
+  - override /training: debug
+  - override /data: fakedata
+  - override /fiber: disabled
+
+data:
+  # Keep these overrides for datasets that support subsetting; for FakeData they
+  # are clipped to dataset length in `make_loaders(...)`.
+  subset_train: 1000
+  subset_test: 500
+
+wandb:
+  enabled: false

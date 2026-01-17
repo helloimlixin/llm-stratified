@@ -1,0 +1,9 @@
+# Debug/test configuration (minimal training)
+epochs: 2
+lr: 3e-4
+weight_decay: 0.05
+grad_clip: 1.0
+label_smoothing: 0.0
+warmup_epochs: 1
+cosine_schedule: false
+save_interval: 1

@@ -1,0 +1,9 @@
+# @package _global_
+# Full polysemy study with ViT token analysis
+defaults:
+  - override /training: long
+  - override /fiber: vit_polysemy
+
+wandb:
+  enabled: true
+  tags: [polysemy, vit-analysis]

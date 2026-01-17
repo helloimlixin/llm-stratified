@@ -1,0 +1,46 @@
+# TinyViT Training Configuration
+# Usage: python src/train.py [overrides]
+# Examples:
+#   python src/train.py                           # Default CIFAR10 training
+#   python src/train.py data=fakedata             # No-download smoke test dataset
+#   python src/train.py data=stl10 training.epochs=100  # STL10 with 100 epochs
+#   python src/train.py model=timm_vit            # Use timm ViT backbone
+#   python src/train.py fiber=polysemy            # Enable polysemy analysis
+#   python src/train.py compute=ddp               # Multi-GPU with DDP
+#   python src/train.py +experiment=quick_test    # Quick test run (defaults to data=fakedata)
+#   python src/train.py +experiment=volume_probe  # No-training volume probe (tokens vs patch embeds vs pixel patches)
+
+defaults:
+  - model: tinyvit
+  - data: cifar10
+  - training: default
+  - fiber: disabled
+  - volume_probe: disabled
+  - compute: single_gpu
+  - _self_
+
+# Output directory (Hydra will create timestamped subdirs)
+hydra:
+  run:
+    dir: runs/hydra/${data.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: runs/hydra/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Experiment settings
+seed: 1337
+runs: 1
+
+# Wandb settings
+wandb:
+  enabled: false
+  project: tinyvit
+  name: null  # Auto-generate if null
+  tags: []
+
+# Output paths (relative to hydra.run.dir)
+paths:
+  checkpoints: checkpoints
+  embeddings: embeddings
+  analysis: fiber_analysis
+  volume_probe: volume_probe

@@ -1,0 +1,14 @@
+# Timm ViT-Small backbone
+name: timm_vit_small
+
+timm_model: vit_small_patch16_224
+timm_pretrained: true
+
+patch_size: 16
+embed_dim: 384
+depth: 12
+num_heads: 6
+mlp_ratio: 4.0
+dropout: 0.0
+
+compile: false

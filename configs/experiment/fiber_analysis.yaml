@@ -1,0 +1,9 @@
+# @package _global_
+# Fiber bundle analysis experiment
+defaults:
+  - override /training: default
+  - override /fiber: basic
+
+wandb:
+  enabled: true
+  tags: [fiber-analysis]

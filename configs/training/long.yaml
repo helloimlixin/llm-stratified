@@ -1,0 +1,9 @@
+# Long training for best results
+epochs: 200
+lr: 3e-4
+weight_decay: 0.05
+grad_clip: 1.0
+label_smoothing: 0.1
+warmup_epochs: 10
+cosine_schedule: true
+save_interval: 20

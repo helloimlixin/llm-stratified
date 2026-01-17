@@ -1,0 +1,5 @@
+# Multi-GPU with DistributedDataParallel
+# Launch with: torchrun --nproc_per_node=N src/train.py compute=ddp
+mode: ddp
+use_ddp: true
+use_accelerate: false

@@ -1,0 +1,9 @@
+# Default training configuration
+epochs: 50
+lr: 3e-4
+weight_decay: 0.05
+grad_clip: 1.0
+label_smoothing: 0.0
+warmup_epochs: 5
+cosine_schedule: true
+save_interval: 10

@@ -1,0 +1,17 @@
+# @package _global_
+# Fine-tune pretrained timm ViT
+defaults:
+  - override /model: timm_vit
+  - override /data: cifar10
+  - override /training: fast
+
+data:
+  img_size: 224  # Required for timm ViT
+
+training:
+  lr: 1e-4  # Lower LR for fine-tuning
+  epochs: 20
+
+wandb:
+  enabled: true
+  tags: [timm, pretrained, fine-tune]

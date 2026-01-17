@@ -1,0 +1,13 @@
+# Larger TinyViT configuration for more complex datasets
+name: tinyvit_large
+
+patch_size: 4
+embed_dim: 384
+depth: 12
+num_heads: 6
+mlp_ratio: 4.0
+dropout: 0.1
+
+timm_model: null
+timm_pretrained: true
+compile: false

@@ -61,6 +61,12 @@ Thumbs.db
 results/
 *_output/
 *_results/
+data/
+outputs/
+runs/
+tinyvit_runs/
+imagegpt_runs/
+wandb/
 checkpoints/
 *.pth
 *.pt

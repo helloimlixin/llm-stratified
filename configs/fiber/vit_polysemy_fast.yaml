@@ -1,0 +1,36 @@
+# Fast ViT token polysemy analysis
+enabled: true
+embed_interval: 10
+max_tokens: 1024
+embed_full_val: false
+
+vol_min: 8
+vol_max: 64
+ws: 8
+alpha: 0.005
+nstrat: 3
+neighborhood_size: null
+
+polysemy: false
+polysemy_k: 48
+polysemy_anchors: 12
+polysemy_grid_cols: 8
+
+polysemy_invert: false
+polysemy_invert_steps: 200
+polysemy_invert_restarts: 6
+polysemy_invert_lr: 0.08
+polysemy_invert_tv: 1e-3
+polysemy_invert_l2: 1e-4
+polysemy_invert_patch_only: true
+polysemy_invert_blur_every: 10
+polysemy_invert_blur_sigma: 0.8
+
+# Fast ViT token polysemy settings
+vit_token_polysemy: true
+vit_token_polysemy_k: 256
+vit_token_polysemy_topk: 16
+vit_token_polysemy_ablate: true
+vit_token_polysemy_ablate_batches: 10
+vit_token_polysemy_min_count: 50
+vit_token_polysemy_ablate_reps: 5

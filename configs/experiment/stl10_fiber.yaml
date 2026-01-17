@@ -1,0 +1,14 @@
+# @package _global_
+# STL-10 with fiber bundle analysis
+defaults:
+  - override /data: stl10
+  - override /training: default
+  - override /fiber: basic
+  - override /model: tinyvit
+
+model:
+  patch_size: 8  # Larger patches for 96x96 images
+
+wandb:
+  enabled: true
+  tags: [stl10, fiber-analysis]
