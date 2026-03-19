@@ -14,14 +14,8 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
 
-try:
-    import wandb
-except ImportError:  # pragma: no cover
-    wandb = None
-
 from data import make_loaders, resolve_class_names
-from fiber_bundle import collect_patch_tokens, plot_progress, run_fiber_analysis_epoch
-from models import TinyViT, TimmViTWrapper, resolve_patch_size
+from models import resolve_patch_size
 from utils import seed_everything
 
 from training.backend import gather_ddp_tensor, init_backend
@@ -32,6 +26,8 @@ from training.loops import (
     train_one_epoch,
     train_one_epoch_accelerate,
 )
+from training.model_factory import build_classifier_model
+from training.wandb_utils import finish_wandb_run, init_wandb_run
 
 
 def run_training(
@@ -74,6 +70,7 @@ def run_training(
 ) -> None:
     """Unified training driver supporting single-GPU, DDP, and Accelerate backends."""
     fiber_cfg = fiber_cfg or FiberConfig()
+    wandb = None
     if timm_model and img_size is None:
         img_size = 224
 
@@ -89,12 +86,8 @@ def run_training(
 
         def _cleanup() -> None:
             try:
-                if is_main_process and wandb:
-                    try:
-                        if getattr(wandb, "run", None):
-                            wandb.finish()
-                    except Exception:
-                        pass
+                if is_main_process:
+                    finish_wandb_run(wandb)
                 if dist.is_initialized():
                     dist.destroy_process_group()
             except Exception:
@@ -135,42 +128,29 @@ def run_training(
 
     # Wandb init
     if wandb_on and is_main_process:
-        if wandb is None:
-            print("[wandb] ERROR: not installed; disabling")
-            wandb_on = False
-        else:
-            try:
-                if os.environ.get("WANDB_MODE", "online") == "online":
-                    try:
-                        if wandb.api.api_key is None:
-                            print("[wandb] WARNING: Not logged in, using offline mode")
-                            os.environ["WANDB_MODE"] = "offline"
-                    except Exception:
-                        pass
-                wandb.init(
-                    project=wandb_project,
-                    name=wandb_runname,
-                    config=dict(
-                        dataset=dataset_name,
-                        img_size=final_img_size,
-                        patch_size=patch_size,
-                        embed_dim=embed_dim,
-                        depth=depth,
-                        num_heads=num_heads,
-                        lr=lr,
-                        wd=wd,
-                        epochs=num_epochs,
-                        batch_size=batch_size_train,
-                        fiber_enabled=fiber_cfg.enabled,
-                        num_gpus=world_size,
-                        use_ddp=use_ddp,
-                        use_accelerate=use_accelerate,
-                    ),
-                )
-                print(f"[wandb] Initialized: {wandb.run.url if wandb.run else 'N/A'}")
-            except Exception as e:
-                print(f"[wandb] ERROR: {e}")
-                wandb_on = False
+        wandb = init_wandb_run(
+            enabled=True,
+            project=wandb_project,
+            name=wandb_runname,
+            config=dict(
+                dataset=dataset_name,
+                img_size=final_img_size,
+                patch_size=patch_size,
+                embed_dim=embed_dim,
+                depth=depth,
+                num_heads=num_heads,
+                lr=lr,
+                wd=wd,
+                epochs=num_epochs,
+                batch_size=batch_size_train,
+                fiber_enabled=fiber_cfg.enabled,
+                num_gpus=world_size,
+                use_ddp=use_ddp,
+                use_accelerate=use_accelerate,
+            ),
+            show_url=True,
+        )
+        wandb_on = wandb is not None
 
     for run_idx in range(num_runs):
         # Run directory setup
@@ -192,16 +172,20 @@ def run_training(
         seed_everything(seed)
 
         # Model
-        patch_size_used = patch_size
-        if timm_model:
-            model = TimmViTWrapper(timm_model, num_classes, pretrained=timm_pretrained)
-            timm_patch = resolve_patch_size(model)
-            if timm_patch:
-                patch_size_used = timm_patch
-                if is_main_process:
-                    print(f"[info] Using timm {timm_model} with patch size {patch_size_used}")
-        else:
-            model = TinyViT(final_img_size, patch_size, in_chans, num_classes, embed_dim, depth, num_heads, mlp_ratio, dropout_rate)
+        model, patch_size_used = build_classifier_model(
+            num_classes=num_classes,
+            in_chans=in_chans,
+            img_size=final_img_size,
+            patch_size=patch_size,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout_rate=dropout_rate,
+            timm_model=timm_model,
+            timm_pretrained=timm_pretrained,
+            announce=is_main_process,
+        )
 
         if not use_accelerate:
             model = model.to(device)
@@ -306,6 +290,8 @@ def run_training(
 
             # Fiber analysis
             if fiber_cfg.enabled and (epoch == 0 or (epoch + 1) % fiber_cfg.embed_interval == 0 or epoch == num_epochs - 1):
+                from fiber_bundle import collect_patch_tokens, run_fiber_analysis_epoch
+
                 if use_ddp and not use_accelerate and dist.is_initialized():
                     dist.barrier()
                 if use_accelerate:
@@ -448,6 +434,8 @@ def run_training(
 
         # Save histories
         if fiber_cfg.enabled and is_main_process and run_dir:
+            from fiber_bundle import plot_progress
+
             with open(run_dir / "train_history.json", "w") as fp:
                 json.dump(train_history, fp, indent=2)
             with open(run_dir / "fiber_history.json", "w") as fp:
@@ -463,11 +451,7 @@ def run_training(
                 print(f"Saved summary plot -> {run_dir / 'fiber_bundle_summary.png'}")
 
     # Cleanup
-    if wandb_on and is_main_process and wandb:
-        try:
-            wandb.finish()
-        except Exception:
-            pass
+    if wandb_on and is_main_process:
+        finish_wandb_run(wandb)
     if use_ddp and not use_accelerate and dist.is_initialized():
         dist.destroy_process_group()
-

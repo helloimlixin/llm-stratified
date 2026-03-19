@@ -4,15 +4,14 @@ Fiber bundle / stratified estimator analysis utilities for TinyViT embeddings.
 Includes patch-token collection, stratification tests, and visualization helpers.
 """
 
+from __future__ import annotations
+
 import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import scipy.spatial
 import scipy.stats
@@ -32,6 +31,24 @@ except ImportError:
 
 from data import get_norm_stats
 from utils import denormalize_images, to_serializable
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    matplotlib = None
+    plt = None
+    HAS_MATPLOTLIB = False
+
+
+def _require_matplotlib():
+    if plt is None:
+        raise ImportError("matplotlib is required for fiber-bundle plotting outputs")
+    return plt
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +940,7 @@ def make_polysemy_irregularity_plot(
     *, entropies: np.ndarray, fiber_results: List[Dict[str, Any]], out_dir: Path, prefix: str,
     alpha: float = 1e-2
 ) -> Tuple[Path | None, Dict[str, float]]:
+    plt_mod = _require_matplotlib()
     if entropies.size == 0 or not fiber_results:
         return None, {}
     _, irr, rejected = _compute_irregularity_scores(fiber_results, alpha)
@@ -956,7 +974,7 @@ def make_polysemy_irregularity_plot(
         "alpha": float(alpha),
     }
 
-    fig, axes = plt.subplots(1, 2, figsize=(9, 4))
+    fig, axes = plt_mod.subplots(1, 2, figsize=(9, 4))
     ax0, ax1 = axes
     ax0.scatter(ent[~rejected], irr[~rejected], s=14, alpha=0.7, label="non-reject", color="#4c78a8")
     if ent_rej.size:
@@ -974,12 +992,13 @@ def make_polysemy_irregularity_plot(
     out_path = out_dir / f"{prefix}_polysemy_entropy_vs_irregularity.png"
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    plt_mod.close(fig)
     return out_path, stats
 
 
 def make_polysemy_entropy_scatter(polysemy_result: Dict[str, Any], *, out_dir: Path, prefix: str,
                                   annotate_top: int = 6) -> Path | None:
+    plt_mod = _require_matplotlib()
     anchors = [a for a in polysemy_result.get("anchors", []) if a and "label_entropy" in a]
     if not anchors:
         return None
@@ -994,7 +1013,7 @@ def make_polysemy_entropy_scatter(polysemy_result: Dict[str, Any], *, out_dir: P
     ent, share, uniq = ent[mask], share[mask], uniq[mask]
     ids = [i for i, m in zip(ids, mask.tolist()) if m]
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt_mod.subplots(figsize=(6, 4))
     sc = ax.scatter(share, ent, c=uniq, cmap="viridis", s=45, alpha=0.85)
     ax.set_xlabel("Top-label share")
     ax.set_ylabel("Label entropy")
@@ -1009,7 +1028,7 @@ def make_polysemy_entropy_scatter(polysemy_result: Dict[str, Any], *, out_dir: P
     out_path = out_dir / f"{prefix}_polysemy_entropy_scatter.png"
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
-    plt.close(fig)
+    plt_mod.close(fig)
     polysemy_result.setdefault("paths", {})["polysemy/entropy_scatter"] = out_path
     return out_path
 
@@ -1098,7 +1117,8 @@ def _eval_ablation_controls(*, model: torch.nn.Module, loader: DataLoader, centr
 # ---------------------------------------------------------------------------
 def plot_progress(train_history: List[Dict], fiber_history: List[Dict], final_coords_3d: np.ndarray,
                   final_colors: np.ndarray, out_path: Path) -> None:
-    fig = plt.figure(figsize=(18, 5))
+    plt_mod = _require_matplotlib()
+    fig = plt_mod.figure(figsize=(18, 5))
     ax1, ax2 = fig.add_subplot(1, 3, 1), fig.add_subplot(1, 3, 2)
     ax3 = fig.add_subplot(1, 3, 3, projection="3d")
     epochs = [m["epoch"] for m in train_history]
@@ -1112,11 +1132,12 @@ def plot_progress(train_history: List[Dict], fiber_history: List[Dict], final_co
     sc = ax3.scatter(final_coords_3d[:, 0], final_coords_3d[:, 1], final_coords_3d[:, 2], c=final_colors, cmap="viridis", s=12, alpha=0.85)
     ax3.set_title("Embeddings (PCA 3D)"); ax3.set_xticks([]); ax3.set_yticks([]); ax3.set_zticks([])
     fig.colorbar(sc, ax=ax3, shrink=0.6, label="dim")
-    fig.tight_layout(); fig.savefig(out_path, dpi=200); plt.close(fig)
+    fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
 
 
 def make_embedding_figure_3d(coords3d: np.ndarray, dims: np.ndarray, title: str = "Embeddings (PCA 3D)") -> plt.Figure:
-    fig = plt.figure(figsize=(6, 5))
+    plt_mod = _require_matplotlib()
+    fig = plt_mod.figure(figsize=(6, 5))
     ax = fig.add_subplot(111, projection="3d")
     sc = ax.scatter(coords3d[:, 0], coords3d[:, 1], coords3d[:, 2], c=dims, cmap="viridis", s=10, alpha=0.85)
     ax.set_title(title); ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
@@ -1404,17 +1425,18 @@ def run_fiber_analysis_epoch(
     # Wandb logging
     if wandb_module:
         try:
+            plt_mod = _require_matplotlib()
             fig3d = make_embedding_figure_3d(final_coords_3d, final_dims)
             log_dict = {
                 "epoch": epoch, "fiber/mean_dim": fiber_summary["mean_dim"], "fiber/median_dim": fiber_summary.get("median_dim", np.nan),
                 "fiber/mean_irregularity": fiber_summary.get("mean_irregularity", np.nan), "fiber/irregular_ratio": fiber_summary.get("irregular_ratio", np.nan),
                 "embeddings/pca_3d": wandb_module.Image(fig3d, caption=f"Epoch {epoch}")
             }
-            plt.close(fig3d)
+            plt_mod.close(fig3d)
             if final_tsne_3d is not None:
                 fig_tsne = make_embedding_figure_tsne(final_tsne_3d, final_dims[tsne_idx] if tsne_idx is not None else final_dims)
                 log_dict["embeddings/tsne_3d"] = wandb_module.Image(fig_tsne, caption=f"Epoch {epoch}")
-                plt.close(fig_tsne)
+                plt_mod.close(fig_tsne)
             if polysemy_result and polysemy_result.get("anchors"):
                 ents = [a.get("label_entropy", np.nan) for a in polysemy_result["anchors"] if a]
                 if ents:

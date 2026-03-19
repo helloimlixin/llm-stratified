@@ -84,6 +84,14 @@ def make_dataset(name: str, root: str, img_size: int) -> Tuple[torch.utils.data.
         train_ds = torchvision.datasets.CIFAR100(root=root, train=True, download=True, transform=make_tf(img_size, True))
         test_ds = torchvision.datasets.CIFAR100(root=root, train=False, download=True, transform=make_tf(img_size, False))
         return train_ds, test_ds, 100
+    if name == "FLOWERS102":
+        train_ds = torchvision.datasets.Flowers102(root=root, split="train", download=True, transform=make_tf(img_size, True))
+        test_ds = torchvision.datasets.Flowers102(root=root, split="test", download=True, transform=make_tf(img_size, False))
+        return train_ds, test_ds, 102
+    if name == "FOOD101":
+        train_ds = torchvision.datasets.Food101(root=root, split="train", download=True, transform=make_tf(img_size, True))
+        test_ds = torchvision.datasets.Food101(root=root, split="test", download=True, transform=make_tf(img_size, False))
+        return train_ds, test_ds, 101
     raise ValueError(f"Unsupported dataset: {name}")
 
 
@@ -501,7 +509,12 @@ def _patch_bbox(p: int, grid: int, patch_size: int) -> Tuple[int, int, int, int]
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ImageGPT-style discrete-token modeling + polysemy probes")
-    p.add_argument("--dataset", type=str, default="STL10", choices=["STL10", "CIFAR10", "CIFAR100"])
+    p.add_argument(
+        "--dataset",
+        type=str,
+        default="STL10",
+        choices=["STL10", "CIFAR10", "CIFAR100", "FLOWERS102", "FOOD101"],
+    )
     p.add_argument("--root", type=str, default="./data")
     p.add_argument("--img-size", type=int, default=96)
     p.add_argument("--patch-size", type=int, default=8)

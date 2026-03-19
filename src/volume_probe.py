@@ -25,28 +25,66 @@ except Exception:  # pragma: no cover
     to_pil_image = None
 
 from data import make_loaders
-from fiber_bundle import (
+from stratified_geometry import (
     normalize_volume_range,
     run_fiber_bundle_test_from_sorted_dists,
     sorted_distance_matrix,
     summarize_stratifications,
 )
-from models import TinyViT, TimmViTWrapper, resolve_patch_size
+from models import DinoV2Wrapper, TinyViT, TimmViTWrapper, resolve_patch_size
 from utils import denormalize_images, seed_everything, to_serializable
 
 
-def _flatten_patches(imgs: torch.Tensor, patch_size: int) -> torch.Tensor:
+def _flatten_patches(imgs: torch.Tensor, patch_size: int, patch_stride: int | None = None) -> torch.Tensor:
     b, c, h, w = imgs.shape
     ps = int(patch_size)
-    gh, gw = h // ps, w // ps
-    if gh <= 0 or gw <= 0:
+    stride = int(patch_stride or patch_size)
+    if min(h, w) < ps or stride <= 0:
         return torch.empty(0, c * ps * ps)
-    imgs = imgs[:, :, : gh * ps, : gw * ps].contiguous()
-    return (
-        imgs.reshape(b, c, gh, ps, gw, ps)
-        .permute(0, 2, 4, 1, 3, 5)
-        .reshape(b * gh * gw, c * ps * ps)
-    )
+    patches = torch.nn.functional.unfold(imgs.contiguous(), kernel_size=ps, stride=stride)
+    return patches.transpose(1, 2).reshape(b * patches.shape[-1], c * ps * ps)
+
+
+def _resolve_prefix_tokens(model: torch.nn.Module) -> int:
+    if hasattr(model, "num_prefix_tokens"):
+        return int(getattr(model, "num_prefix_tokens"))
+    return 2 if getattr(model, "has_dist_token", False) else 1
+
+
+def _prepare_probe_inputs(
+    model: torch.nn.Module,
+    imgs: torch.Tensor,
+    dataset: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if hasattr(model, "prepare_images_for_features"):
+        return model.prepare_images_for_features(imgs, dataset)
+    return imgs, denormalize_images(imgs, dataset)
+
+
+def _forward_feature_pack(model: torch.nn.Module, imgs: torch.Tensor) -> dict[str, torch.Tensor]:
+    if hasattr(model, "forward_feature_pack"):
+        return model.forward_feature_pack(imgs)
+    return {
+        "tokens": model.forward_features(imgs),
+        "patch_embeddings": _forward_patch_embed(model, imgs),
+    }
+
+
+def _flatten_token_tensor(tokens: torch.Tensor, prefix_tokens: int) -> torch.Tensor:
+    start_idx = max(0, min(prefix_tokens, int(tokens.shape[1])))
+    return tokens[:, start_idx:, :].reshape(-1, tokens.shape[-1])
+
+
+def _representation_prefix_tokens(model: torch.nn.Module, rep_name: str) -> int:
+    if rep_name == "tokens":
+        return _resolve_prefix_tokens(model)
+    if rep_name == "patch_embeddings" and bool(getattr(model, "patch_embeddings_include_prefix_tokens", False)):
+        return _resolve_prefix_tokens(model)
+    return 0
+
+
+def _pixel_rep_name(patch_size: int, patch_stride: int) -> str:
+    return "patch_pixels" if int(patch_stride) == int(patch_size) else f"patch_pixels_stride_{int(patch_stride)}"
 
 
 def _forward_patch_embed(model: torch.nn.Module, imgs: torch.Tensor) -> torch.Tensor:
@@ -71,25 +109,27 @@ def collect_representations(
     device: torch.device,
     dataset: str,
     patch_size: int,
+    pixel_patch_stride: int | None,
     max_tokens: int,
     show_progress: bool,
     viz_images: int = 16,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    tokens, patch_embeds, patch_pixels = [], [], []
+) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    rep_buffers: dict[str, list[torch.Tensor]] = {}
     viz_imgs = []
     seen, warned = 0, False
+    pixel_stride = int(pixel_patch_stride or patch_size)
+    overlap_name = _pixel_rep_name(patch_size, pixel_stride)
     iterator = tqdm(loader, desc="Collect tokens", leave=False) if show_progress and tqdm else loader
     for batch in iterator:
         imgs = batch[0].to(device)
-        feats = model.forward_features(imgs)
-        start_idx = 2 if getattr(model, "has_dist_token", False) else 1
-        token_flat = feats[:, start_idx:, :].reshape(-1, feats.shape[-1])
-
-        patch_emb = _forward_patch_embed(model, imgs)
-        patch_emb_flat = patch_emb.reshape(-1, patch_emb.shape[-1])
-
-        denorm = denormalize_images(imgs, dataset)
-        patch_pix_flat = _flatten_patches(denorm, patch_size).to(dtype=torch.float32)
+        model_imgs, denorm = _prepare_probe_inputs(model, imgs, dataset)
+        feature_pack = _forward_feature_pack(model, model_imgs)
+        flattened = {
+            name: _flatten_token_tensor(feats, _representation_prefix_tokens(model, name)).detach().cpu()
+            for name, feats in feature_pack.items()
+        }
+        patch_pix_flat = _flatten_patches(denorm, patch_size, patch_stride=patch_size).to(dtype=torch.float32).cpu()
+        overlap_flat = _flatten_patches(denorm, patch_size, patch_stride=pixel_stride).to(dtype=torch.float32).cpu()
 
         max_viz = max(0, int(viz_images))
         if max_viz and len(viz_imgs) < max_viz:
@@ -98,29 +138,28 @@ def collect_representations(
                 for i in range(take):
                     viz_imgs.append(denorm[i].detach().cpu())
 
-        count = min(token_flat.shape[0], patch_emb_flat.shape[0], patch_pix_flat.shape[0])
-        if not warned and count != token_flat.shape[0]:
+        aligned_counts = [patch_pix_flat.shape[0]] + [rep.shape[0] for rep in flattened.values()]
+        count = min(aligned_counts) if aligned_counts else 0
+        if not warned and any(rep.shape[0] != count for rep in flattened.values()):
             print(
-                "[warn] Patch counts mismatch; truncating to common length "
-                f"{count} (tokens {token_flat.shape[0]}, embeds {patch_emb_flat.shape[0]}, pixels {patch_pix_flat.shape[0]})."
+                "[warn] Patch counts mismatch across representations; truncating to common length "
+                f"{count} ({', '.join(f'{name} {rep.shape[0]}' for name, rep in flattened.items())}, pixels {patch_pix_flat.shape[0]})."
             )
             warned = True
 
-        tokens.append(token_flat[:count].detach().cpu())
-        patch_embeds.append(patch_emb_flat[:count].detach().cpu())
-        patch_pixels.append(patch_pix_flat[:count].detach().cpu())
+        for name, rep in flattened.items():
+            rep_buffers.setdefault(name, []).append(rep[:count])
+        rep_buffers.setdefault("patch_pixels", []).append(patch_pix_flat[:count])
+        if overlap_name != "patch_pixels":
+            rep_buffers.setdefault(overlap_name, []).append(overlap_flat)
         seen += count
         if seen >= max_tokens:
             break
 
-    if not tokens:
-        return torch.empty(0, 1), torch.empty(0, 1), torch.empty(0, 1), torch.empty(0, 3, 1, 1)
-    return (
-        torch.cat(tokens, dim=0)[:max_tokens],
-        torch.cat(patch_embeds, dim=0)[:max_tokens],
-        torch.cat(patch_pixels, dim=0)[:max_tokens],
-        torch.stack(viz_imgs, dim=0) if viz_imgs else torch.empty(0, 3, 1, 1),
-    )
+    if not rep_buffers:
+        return {}, torch.empty(0, 3, 1, 1)
+    reps = {name: torch.cat(parts, dim=0)[:max_tokens] for name, parts in rep_buffers.items() if parts}
+    return reps, torch.stack(viz_imgs, dim=0) if viz_imgs else torch.empty(0, 3, 1, 1)
 
 
 def _run_volume_estimation(
@@ -174,6 +213,7 @@ def run_volume_probe(
     device: torch.device,
     dataset: str,
     patch_size: int,
+    pixel_patch_stride: int | None,
     max_tokens: int,
     vol_min: int,
     vol_max: int,
@@ -190,16 +230,19 @@ def run_volume_probe(
     viz_nn_k: int = 8,
     config: dict | None = None,
 ) -> dict:
-    tokens, patch_embeds, patch_pixels, example_images = collect_representations(
+    representations, example_images = collect_representations(
         model=model,
         loader=loader,
         device=device,
         dataset=dataset,
         patch_size=patch_size,
+        pixel_patch_stride=pixel_patch_stride,
         max_tokens=max_tokens,
         show_progress=progress,
         viz_images=viz_images,
     )
+    patch_pixels = representations.get("patch_pixels", torch.empty(0, 1))
+    overlap_pixel_names = [name for name in representations if name.startswith("patch_pixels_stride_")]
 
     out_dir.mkdir(parents=True, exist_ok=True)
     results_payload = {
@@ -222,19 +265,25 @@ def run_volume_probe(
             print(f"[viz] failed to save example_images: {e}")
 
         try:
-            n = int(patch_pixels.shape[0])
             ps = int(patch_size)
-            if viz_patches > 0 and n > 0 and ps > 0:
-                c = int(patch_pixels.shape[1] // max(1, ps * ps))
-                if c > 0 and patch_pixels.shape[1] == c * ps * ps:
-                    rng = np.random.default_rng(int(seed))
-                    take = min(int(viz_patches), n)
-                    idx = rng.choice(n, size=take, replace=False) if take < n else np.arange(n)
-                    patch_imgs = patch_pixels[idx].to(dtype=torch.float32).reshape(take, c, ps, ps).clamp(0, 1)
-                    grid = make_grid(patch_imgs, nrow=min(8, take), padding=2)
-                    out_path = out_dir / "example_patches.png"
-                    to_pil_image(grid).save(out_path)
-                    viz_files["example_patches"] = out_path.name
+            for rep_name in ["patch_pixels"] + overlap_pixel_names:
+                rep = representations.get(rep_name)
+                if rep is None:
+                    continue
+                n = int(rep.shape[0])
+                if viz_patches <= 0 or n <= 0 or ps <= 0:
+                    continue
+                c = int(rep.shape[1] // max(1, ps * ps))
+                if c <= 0 or rep.shape[1] != c * ps * ps:
+                    continue
+                rng = np.random.default_rng(int(seed) + (hash(rep_name) % 10000))
+                take = min(int(viz_patches), n)
+                idx = rng.choice(n, size=take, replace=False) if take < n else np.arange(n)
+                patch_imgs = rep[idx].to(dtype=torch.float32).reshape(take, c, ps, ps).clamp(0, 1)
+                grid = make_grid(patch_imgs, nrow=min(8, take), padding=2)
+                out_path = out_dir / f"example_{rep_name}.png"
+                to_pil_image(grid).save(out_path)
+                viz_files[f"example_{rep_name}"] = out_path.name
         except Exception as e:
             print(f"[viz] failed to save example_patches: {e}")
 
@@ -244,15 +293,16 @@ def run_volume_probe(
             if n <= 1 or viz_nn_anchors <= 0 or viz_nn_k <= 0:
                 return
             ps = int(patch_size)
-            c = int(patch_pixels.shape[1] // max(1, ps * ps))
-            if c <= 0 or patch_pixels.shape[1] != c * ps * ps:
+            display_source = rep if rep_name.startswith("patch_pixels_stride_") else patch_pixels
+            c = int(display_source.shape[1] // max(1, ps * ps))
+            if c <= 0 or display_source.shape[1] != c * ps * ps:
                 return
             anchors = min(int(viz_nn_anchors), n)
             nn_k_eff = min(int(viz_nn_k), n - 1)
             rng = np.random.default_rng(int(seed) + (hash(rep_name) % 10000))
             anchor_idx = rng.choice(n, size=anchors, replace=False) if anchors < n else np.arange(n)
             rep_f = rep.to(dtype=torch.float32)
-            patches = patch_pixels.to(dtype=torch.float32)
+            patches = display_source.to(dtype=torch.float32)
             rows = []
             for a in anchor_idx.tolist():
                 x0 = rep_f[int(a)]
@@ -268,20 +318,15 @@ def run_volume_probe(
             viz_files[f"nn_{rep_name}"] = out_path.name
 
         try:
-            _save_nn_grid(tokens, "tokens")
-            _save_nn_grid(patch_embeds, "patch_embeddings")
-            _save_nn_grid(patch_pixels, "patch_pixels")
+            for rep_name, rep in representations.items():
+                _save_nn_grid(rep, rep_name)
         except Exception as e:
             print(f"[viz] failed to save nn grids: {e}")
 
     if viz_files:
         results_payload["viz"] = viz_files
 
-    for name, emb in [
-        ("tokens", tokens),
-        ("patch_embeddings", patch_embeds),
-        ("patch_pixels", patch_pixels),
-    ]:
+    for name, emb in representations.items():
         summary, dims, results, knn_curve = _run_volume_estimation(
             emb,
             vol_min=vol_min,
@@ -312,6 +357,9 @@ def run_volume_probe(
 def _build_model(
     *, args: argparse.Namespace, num_classes: int, in_chans: int, img_size: int
 ) -> tuple[torch.nn.Module, int]:
+    if args.feature_backbone == "dinov2":
+        model = DinoV2Wrapper(model_name=args.dinov2_model, token_layers=args.dinov2_layers)
+        return model, int(model.patch_size)
     if args.timm_model:
         model = TimmViTWrapper(args.timm_model, num_classes, pretrained=args.timm_pretrained)
         patch_size = resolve_patch_size(model) or args.patch_size
@@ -365,6 +413,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--save-full", action="store_true")
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--feature-backbone", choices=["model", "dinov2"], default="model")
+    parser.add_argument("--dinov2-model", default="facebook/dinov2-base")
+    parser.add_argument("--dinov2-layers", type=int, nargs="*", default=None)
+    parser.add_argument("--pixel-patch-stride", type=int, default=None)
     return parser.parse_args()
 
 
@@ -407,8 +459,12 @@ def main() -> None:
         "nstrat": args.nstrat,
         "seed": args.seed,
         "device": str(device),
+        "feature_backbone": args.feature_backbone,
         "timm_model": args.timm_model,
         "timm_pretrained": bool(args.timm_pretrained),
+        "dinov2_model": args.dinov2_model,
+        "dinov2_layers": list(args.dinov2_layers) if args.dinov2_layers is not None else None,
+        "pixel_patch_stride": args.pixel_patch_stride,
     }
     out_dir = Path(args.outdir)
     run_volume_probe(
@@ -417,6 +473,7 @@ def main() -> None:
         device=device,
         dataset=args.dataset,
         patch_size=patch_size,
+        pixel_patch_stride=args.pixel_patch_stride,
         max_tokens=args.max_tokens,
         vol_min=args.vol_min,
         vol_max=args.vol_max,

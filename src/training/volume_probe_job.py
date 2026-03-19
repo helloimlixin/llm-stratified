@@ -6,11 +6,12 @@ from typing import Optional
 import torch
 
 from data import make_loaders
-from models import TinyViT, TimmViTWrapper, resolve_patch_size
+from models import DinoV2Wrapper
 from utils import seed_everything
 from volume_probe import run_volume_probe
 
 from training.configs import VolumeProbeConfig
+from training.model_factory import build_classifier_model
 
 
 def run_volume_probe_job(
@@ -53,16 +54,25 @@ def run_volume_probe_job(
         world_size=1,
     )
 
-    patch_size_used = patch_size
-    if timm_model:
-        model = TimmViTWrapper(timm_model, num_classes, pretrained=timm_pretrained)
-        timm_patch = resolve_patch_size(model)
-        if timm_patch:
-            patch_size_used = timm_patch
-            print(f"[info] Using timm {timm_model} with patch size {patch_size_used}")
+    if volume_cfg.feature_backbone == "dinov2":
+        model = DinoV2Wrapper(model_name=volume_cfg.dinov2_model, token_layers=volume_cfg.dinov2_layers)
+        patch_size_used = int(model.patch_size)
+        print(f"[info] Using DINOv2 probe backbone {volume_cfg.dinov2_model} with patch size {patch_size_used}")
     else:
-        model = TinyViT(final_img_size, patch_size, in_chans, num_classes, embed_dim, depth, num_heads, mlp_ratio, dropout_rate)
-
+        model, patch_size_used = build_classifier_model(
+            num_classes=num_classes,
+            in_chans=in_chans,
+            img_size=final_img_size,
+            patch_size=patch_size,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            dropout_rate=dropout_rate,
+            timm_model=timm_model,
+            timm_pretrained=timm_pretrained,
+            announce=True,
+        )
     model = model.to(device)
     model.eval()
 
@@ -81,8 +91,12 @@ def run_volume_probe_job(
         "device": str(device),
         "batch_size_test": batch_size_test,
         "subset_test": subset_test,
+        "feature_backbone": volume_cfg.feature_backbone,
         "timm_model": timm_model,
         "timm_pretrained": timm_pretrained,
+        "dinov2_model": volume_cfg.dinov2_model,
+        "dinov2_layers": volume_cfg.dinov2_layers,
+        "pixel_patch_stride": volume_cfg.pixel_patch_stride,
     }
 
     return run_volume_probe(
@@ -91,6 +105,7 @@ def run_volume_probe_job(
         device=device,
         dataset=dataset_name,
         patch_size=patch_size_used,
+        pixel_patch_stride=volume_cfg.pixel_patch_stride,
         max_tokens=volume_cfg.max_tokens,
         vol_min=volume_cfg.vol_min,
         vol_max=volume_cfg.vol_max,
@@ -107,4 +122,3 @@ def run_volume_probe_job(
         viz_nn_k=volume_cfg.viz_nn_k,
         config=config,
     )
-

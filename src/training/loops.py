@@ -22,6 +22,31 @@ def _accuracy_from_logits(logits: torch.Tensor, labels: torch.Tensor, task_type:
     return (logits.argmax(dim=-1) == labels).float().mean()
 
 
+def _prepare_batch(
+    batch,
+    device: torch.device,
+    task_type: str,
+    *,
+    non_blocking: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    imgs = batch[0].to(device, non_blocking=non_blocking)
+    labels = batch[1].to(device, non_blocking=non_blocking)
+    labels = labels.float() if task_type == "multilabel" else labels.long()
+    return imgs, labels
+
+
+def _finalize_epoch(total_loss: float, total_acc: float, total: int) -> tuple[float, float]:
+    if total <= 0:
+        return float("nan"), float("nan")
+    return total_loss / total, total_acc / total
+
+
+def _maybe_progress(loader, *, desc: str, enabled: bool):
+    if enabled and tqdm is not None:
+        return tqdm(loader, desc=desc, leave=False)
+    return loader
+
+
 @torch.no_grad()
 def multilabel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
     return _accuracy_from_logits(logits, targets, "multilabel").item()
@@ -45,8 +70,7 @@ def train_one_epoch(
         sampler.set_epoch(epoch)
     total_loss, total_acc, total = 0.0, 0.0, 0
     for batch in loader:
-        imgs, labels = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
-        labels = labels.float() if task_type == "multilabel" else labels.long()
+        imgs, labels = _prepare_batch(batch, device, task_type, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
             logits = model(imgs)
@@ -68,7 +92,7 @@ def train_one_epoch(
             total_loss += loss.item() * bs
             total_acc += _accuracy_from_logits(logits, labels, task_type).item() * bs
             total += bs
-    return total_loss / total, total_acc / total
+    return _finalize_epoch(total_loss, total_acc, total)
 
 
 @torch.no_grad()
@@ -84,15 +108,14 @@ def evaluate(
     total_loss, total_acc, total = 0.0, 0.0, 0
     with torch.inference_mode():
         for batch in loader:
-            imgs, labels = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
-            labels = labels.float() if task_type == "multilabel" else labels.long()
+            imgs, labels = _prepare_batch(batch, device, task_type, non_blocking=True)
             logits = model(imgs)
             loss = criterion(logits, labels)
             bs = labels.size(0)
             total_loss += loss.item() * bs
             total_acc += _accuracy_from_logits(logits, labels, task_type).item() * bs
             total += bs
-    return total_loss / total, total_acc / total
+    return _finalize_epoch(total_loss, total_acc, total)
 
 
 def train_one_epoch_accelerate(
@@ -113,10 +136,13 @@ def train_one_epoch_accelerate(
     loss_sum = torch.tensor(0.0, device=accelerator.device)
     acc_sum = torch.tensor(0.0, device=accelerator.device)
     count_sum = torch.tensor(0.0, device=accelerator.device)
-    iterator = tqdm(loader, desc=f"Train {epoch:03d}", leave=False) if show_progress and accelerator.is_main_process and tqdm else loader
+    iterator = _maybe_progress(
+        loader,
+        desc=f"Train {epoch:03d}",
+        enabled=show_progress and accelerator.is_main_process,
+    )
     for batch in iterator:
-        imgs, labels = batch[0].to(accelerator.device), batch[1].to(accelerator.device)
-        labels = labels.float() if task_type == "multilabel" else labels.long()
+        imgs, labels = _prepare_batch(batch, accelerator.device, task_type)
         with accelerator.autocast():
             logits = model(imgs)
             loss = criterion(logits, labels)
@@ -150,10 +176,9 @@ def evaluate_accelerate(
     loss_sum = torch.tensor(0.0, device=accelerator.device)
     acc_sum = torch.tensor(0.0, device=accelerator.device)
     count_sum = torch.tensor(0.0, device=accelerator.device)
-    iterator = tqdm(loader, desc="Eval", leave=False) if show_progress and accelerator.is_main_process and tqdm else loader
+    iterator = _maybe_progress(loader, desc="Eval", enabled=show_progress and accelerator.is_main_process)
     for batch in iterator:
-        imgs, labels = batch[0].to(accelerator.device), batch[1].to(accelerator.device)
-        labels = labels.float() if task_type == "multilabel" else labels.long()
+        imgs, labels = _prepare_batch(batch, accelerator.device, task_type)
         with accelerator.autocast():
             logits = model(imgs)
             loss = criterion(logits, labels)
@@ -165,4 +190,3 @@ def evaluate_accelerate(
     acc_sum = accelerator.reduce(acc_sum, reduction="sum")
     count_sum = accelerator.reduce(count_sum, reduction="sum")
     return (loss_sum / count_sum).item() if count_sum > 0 else float("nan"), (acc_sum / count_sum).item() if count_sum > 0 else float("nan")
-

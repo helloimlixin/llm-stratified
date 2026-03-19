@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, Subset
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from data import WithIndex, build_dataset, resolve_class_names
+from data import WithIndex, build_dataset, make_loaders, resolve_class_names
 
 
 class DummyDataset(Dataset):
@@ -44,6 +44,23 @@ class TestDataHelpers(unittest.TestCase):
         self.assertEqual(task, "multiclass")
         self.assertGreater(len(train_ds), 0)
         self.assertGreater(len(test_ds), 0)
+
+    def test_make_loaders_keeps_small_train_subset(self):
+        train_loader, _test_loader, _num_classes, _in_chans, _img_size, _task = make_loaders(
+            "FAKEDATA",
+            root=".",
+            img_size=8,
+            batch_size_train=64,
+            batch_size_test=16,
+            num_workers=0,
+            subset_train=32,
+            subset_test=16,
+            device=torch.device("cpu"),
+            distributed=False,
+            rank=0,
+            world_size=1,
+        )
+        self.assertEqual(len(train_loader), 1)
 
 
 if __name__ == "__main__":

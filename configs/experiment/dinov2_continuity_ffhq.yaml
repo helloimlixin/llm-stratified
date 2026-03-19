@@ -1,0 +1,19 @@
+# @package _global_
+# Smooth-manifold continuity experiment on FFHQ:
+# compare overlapping pixel patches against frozen DINOv2 patch features.
+defaults:
+  - override /data: ffhq
+  - override /model: tinyvit
+  - override /volume_probe: dinov2_refined
+  - override /fiber: disabled
+  - override /training: debug
+
+data:
+  subset_test: 256
+  num_workers: 0
+  batch_size_test: 16
+
+wandb:
+  enabled: true
+  project: stratified-manifold-learning
+  tags: [dinov2, continuity, ffhq]

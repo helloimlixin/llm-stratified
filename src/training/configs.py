@@ -53,6 +53,10 @@ class VolumeProbeConfig:
     viz_patches: int = 64
     viz_nn_anchors: int = 3
     viz_nn_k: int = 8
+    feature_backbone: str = "model"
+    dinov2_model: str = "facebook/dinov2-base"
+    dinov2_layers: Optional[list[int]] = None
+    pixel_patch_stride: Optional[int] = None
 
 
 def _get_field_value(source: Any, name: str, default: Any) -> Any:
@@ -104,4 +108,3 @@ def build_volume_probe_config(
         else:
             data[field.name] = _get_field_value(source, field.name, field.default)
     return VolumeProbeConfig(**data)
-

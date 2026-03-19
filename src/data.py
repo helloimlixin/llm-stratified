@@ -15,6 +15,7 @@ import torchvision.transforms as T
 from PIL import Image
 
 __all__ = [
+    "FlatImageDataset",
     "COCO2017MultiLabel",
     "VOCMultiLabel",
     "WithIndex",
@@ -33,7 +34,7 @@ CIFAR_STD = (0.2470, 0.2435, 0.2616)
 # Default image sizes per dataset
 DEFAULT_IMG_SIZES = {
     "CIFAR10": 32, "CIFAR100": 32, "STL10": 96, "FOOD101": 224, "FLOWERS102": 224,
-    "CELEBA": 64, "SVHN": 32, "IMAGENET": 256, "FFHQ": 256,
+    "CELEBA": 64, "CELEBAHQ": 256, "SVHN": 32, "IMAGENET": 256, "FFHQ": 256,
     "VOC": 224, "VOC2007": 224, "VOC2012": 224, "COCO": 224, "COCO2017": 224,
     "FAKEDATA": 32,
 }
@@ -42,6 +43,7 @@ DEFAULT_IMG_SIZES = {
 KNOWN_CLASS_NAMES = {
     "CIFAR10": ["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"],
     "FFHQ": ["face"],
+    "CELEBAHQ": ["face"],
 }
 
 # VOC classes
@@ -221,6 +223,38 @@ class VOCMultiLabel(Dataset):
         return img, y
 
 
+class FlatImageDataset(Dataset):
+    """Image dataset for a flat directory of images, with a deterministic split."""
+
+    def __init__(self, root: str, transform=None, *, split: str = "train", val_fraction: float = 0.1):
+        self.root = Path(root)
+        self.transform = transform
+        self.split = str(split).lower()
+        self.val_fraction = float(val_fraction)
+        exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+        files = sorted(p for p in self.root.iterdir() if p.is_file() and p.suffix.lower() in exts)
+        if not files:
+            raise RuntimeError(f"No image files found in {self.root}")
+
+        val_count = max(1, int(round(len(files) * self.val_fraction)))
+        val_count = min(val_count, max(1, len(files) - 1))
+        split_idx = len(files) - val_count
+        if self.split in {"train", "trainval"}:
+            self.files = files[:split_idx]
+        elif self.split in {"val", "valid", "validation", "test"}:
+            self.files = files[split_idx:]
+        else:
+            raise ValueError(f"Unsupported split for FlatImageDataset: {split}")
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+    def __getitem__(self, idx: int):
+        img = Image.open(self.files[idx]).convert("RGB")
+        x = self.transform(img) if self.transform else img
+        return x, 0
+
+
 def build_dataset(
     name: str = "CIFAR10",
     root: str = "./data",
@@ -313,6 +347,28 @@ def build_dataset(
         train_ds = torchvision.datasets.ImageFolder(root=train_root, transform=train_tf)
         test_ds = torchvision.datasets.ImageFolder(root=val_root, transform=test_tf)
         return train_ds, test_ds, len(train_ds.classes), 3, img_size, "multiclass"
+
+    if name == "CELEBAHQ":
+        train_tf = T.Compose(
+            [
+                T.RandomResizedCrop(img_size, scale=(0.8, 1.0)),
+                T.RandomHorizontalFlip(),
+                T.ColorJitter(0.2, 0.2, 0.2),
+                T.ToTensor(),
+                T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            ]
+        )
+        test_tf = T.Compose(
+            [
+                T.Resize(int(img_size * 1.14)),
+                T.CenterCrop(img_size),
+                T.ToTensor(),
+                T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            ]
+        )
+        train_ds = FlatImageDataset(root=root, split="train", transform=train_tf)
+        test_ds = FlatImageDataset(root=root, split="test", transform=test_tf)
+        return train_ds, test_ds, 1, 3, img_size, "multiclass"
 
     if name in {"FAKEDATA", "FAKE"}:
         train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size)
@@ -491,9 +547,12 @@ def make_loaders(
     pin = device is not None and device.type == "cuda"
     persistent_workers = num_workers > 0
 
+    samples_per_rank = len(train_ds) // max(1, world_size) if distributed else len(train_ds)
+    drop_last_train = samples_per_rank >= batch_size_train
+
     if distributed:
         train_sampler = DistributedSampler(
-            train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=True
+            train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=drop_last_train
         )
         test_sampler = DistributedSampler(
             test_ds, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
@@ -507,7 +566,7 @@ def make_loaders(
         batch_size=batch_size_train,
         shuffle=shuffle_train,
         sampler=train_sampler,
-        drop_last=True,
+        drop_last=drop_last_train,
         num_workers=num_workers,
         pin_memory=pin,
         persistent_workers=persistent_workers,

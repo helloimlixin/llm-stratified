@@ -16,18 +16,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install hydra-core
       - name: Run unit tests
         run: python -m unittest discover -s tests
       - name: Smoke train (1 epoch, fake data)
         run: |
-          python scripts/tinyvit.py \
-            --dataset FAKEDATA \
-            --epochs 1 \
-            --batch-size 16 \
-            --batch-size-test 16 \
-            --subset-train 32 \
-            --subset-test 16 \
-            --num-workers 0 \
-            --save-interval 1 \
-            --outdir ./runs/ci_smoke \
-            --no-cosine
+          python src/train.py \
+            +experiment=quick_test \
+            training.epochs=1 \
+            data.subset_train=32 \
+            data.subset_test=16 \
+            data.num_workers=0 \
+            hydra.run.dir=./runs/ci_smoke

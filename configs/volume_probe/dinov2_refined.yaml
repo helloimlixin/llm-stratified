@@ -1,0 +1,18 @@
+# High-resolution continuity probe using frozen DINOv2 features
+enabled: true
+max_tokens: 3072
+vol_min: 8
+vol_max: 64
+ws: 8
+alpha: 0.005
+nstrat: 3
+save_full: false
+progress: true
+viz_images: 16
+viz_patches: 64
+viz_nn_anchors: 3
+viz_nn_k: 8
+feature_backbone: dinov2
+dinov2_model: facebook/dinov2-base
+dinov2_layers: [3, 6, -1]
+pixel_patch_stride: 7

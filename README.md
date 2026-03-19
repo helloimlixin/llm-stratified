@@ -13,7 +13,9 @@ Main entry points:
 
 - Python 3.10+
 - PyTorch + torchvision
+- `hydra-core` (`src/train.py` uses Hydra for all training / probe runs)
 - `wandb` (optional; logs are still written locally even without online sync)
+- `transformers` (optional; only needed for the frozen DINOv2 continuity probes)
 
 ### Setup
 
@@ -21,8 +23,14 @@ Main entry points:
 # Install PyTorch (adjust for your CUDA version)
 pip install torch torchvision
 
+# Install Hydra (required for src/train.py)
+pip install hydra-core
+
 # Install wandb (optional)
 pip install wandb
+
+# Install transformers (optional, for DINOv2 probing)
+pip install transformers
 
 # Login to wandb (optional, for online logging)
 wandb login
@@ -94,6 +102,15 @@ To log to W&B:
 ```bash
 python src/train.py +experiment=volume_probe data.root=./data \
   wandb.enabled=true wandb.project=tinyvit_fiber wandb.name=stl10_volume_probe
+```
+
+### DINOv2 continuity probe
+
+This preset compares overlapping raw pixel patches against frozen DINOv2 patch features.
+It uses `Food101` by default and downloads DINOv2 weights on the first run.
+
+```bash
+python src/train.py +experiment=dinov2_continuity data.root=./data
 ```
 
 ### Hydra quick test (sanity check)

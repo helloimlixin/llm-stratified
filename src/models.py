@@ -1,18 +1,28 @@
-"""Model definitions for TinyViT and timm wrappers."""
+"""Model definitions for TinyViT, timm wrappers, and frozen DINO feature extractors."""
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     import timm
 except ImportError:
     timm = None
 
+try:
+    from transformers import AutoImageProcessor, AutoModel
+except ImportError:
+    AutoImageProcessor = None
+    AutoModel = None
+
+from utils import denormalize_images
+
 __all__ = [
+    "DinoV2Wrapper",
     "PatchEmbed",
     "MlpBlock",
     "TransformerBlock",
@@ -87,6 +97,7 @@ class TinyViT(nn.Module):
     ) -> None:
         super().__init__()
         self.embed_dim, self.num_classes = embed_dim, num_classes
+        self.num_prefix_tokens = 1
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = (img_size // patch_size) ** 2
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -155,6 +166,7 @@ class TimmViTWrapper(nn.Module):
             raise ImportError("timm is required for --timm-model; pip install timm")
         self.backbone = timm.create_model(model_name, pretrained=pretrained, num_classes=num_classes)
         self.has_dist_token = getattr(self.backbone, "dist_token", None) is not None
+        self.num_prefix_tokens = 2 if self.has_dist_token else 1
         self.embed_dim = getattr(self.backbone, "embed_dim", None) or getattr(self.backbone, "num_features", None)
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
@@ -176,3 +188,93 @@ class TimmViTWrapper(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.tokens_to_logits(self.forward_features(x))
+
+
+def _resolve_processor_size(processor, config) -> int:
+    size = getattr(processor, "size", None)
+    if isinstance(size, dict):
+        for key in ("height", "shortest_edge", "width"):
+            value = size.get(key)
+            if value is not None:
+                return int(value)
+        if size:
+            return int(next(iter(size.values())))
+    if isinstance(size, (tuple, list)) and size:
+        return int(size[0])
+    if isinstance(size, int):
+        return int(size)
+    return int(getattr(config, "image_size", 224))
+
+
+class DinoV2Wrapper(nn.Module):
+    """Frozen DINOv2 feature extractor with layer-wise patch token access."""
+
+    def __init__(self, model_name: str = "facebook/dinov2-base", token_layers: Optional[list[int]] = None):
+        super().__init__()
+        if AutoImageProcessor is None or AutoModel is None:
+            raise ImportError("transformers is required for DINOv2 probing; pip install transformers")
+
+        self.model_name = model_name
+        self.processor = AutoImageProcessor.from_pretrained(model_name)
+        self.backbone = AutoModel.from_pretrained(model_name)
+        self.backbone.eval()
+        for param in self.backbone.parameters():
+            param.requires_grad_(False)
+
+        self.embed_dim = int(getattr(self.backbone.config, "hidden_size", 0))
+        self.patch_size = int(getattr(self.backbone.config, "patch_size", 14))
+        self.expected_image_size = _resolve_processor_size(self.processor, self.backbone.config)
+        self.image_mean = tuple(float(x) for x in getattr(self.processor, "image_mean", (0.485, 0.456, 0.406)))
+        self.image_std = tuple(float(x) for x in getattr(self.processor, "image_std", (0.229, 0.224, 0.225)))
+        self.num_register_tokens = int(getattr(self.backbone.config, "num_register_tokens", 0))
+        self.num_prefix_tokens = 1 + max(0, self.num_register_tokens)
+        self.patch_embeddings_include_prefix_tokens = True
+        self.token_layers = [int(layer) for layer in (token_layers or [-1])]
+
+    def prepare_images_for_features(
+        self,
+        imgs: torch.Tensor,
+        dataset_name: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        imgs01 = denormalize_images(imgs, dataset_name)
+        if imgs01.shape[-2:] != (self.expected_image_size, self.expected_image_size):
+            imgs01 = F.interpolate(
+                imgs01,
+                size=(self.expected_image_size, self.expected_image_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+        mean = torch.tensor(self.image_mean, device=imgs01.device, dtype=imgs01.dtype).view(1, -1, 1, 1)
+        std = torch.tensor(self.image_std, device=imgs01.device, dtype=imgs01.dtype).view(1, -1, 1, 1)
+        pixel_values = (imgs01 - mean) / std
+        return pixel_values, imgs01
+
+    def _resolve_hidden_state_index(self, layer: int, num_states: int) -> int:
+        idx = int(layer)
+        if idx < 0:
+            idx = num_states + idx
+        if idx < 0 or idx >= num_states:
+            raise ValueError(f"Requested DINO hidden state {layer} outside valid range [0, {num_states - 1}]")
+        return idx
+
+    def _layer_key(self, layer: int, resolved_idx: int, *, single_layer: bool) -> str:
+        if single_layer:
+            return "tokens"
+        if layer < 0:
+            return f"tokens_layer_last{abs(layer) - 1}" if layer < -1 else "tokens_layer_last"
+        return f"tokens_layer_{resolved_idx:02d}"
+
+    def forward_feature_pack(self, pixel_values: torch.Tensor) -> dict[str, torch.Tensor]:
+        outputs = self.backbone(pixel_values=pixel_values, output_hidden_states=True, return_dict=True)
+        hidden_states = tuple(outputs.hidden_states or ())
+        if not hidden_states:
+            raise RuntimeError("DINOv2 backbone did not return hidden states.")
+
+        pack: dict[str, torch.Tensor] = {
+            "patch_embeddings": hidden_states[0],
+        }
+        single_layer = len(self.token_layers) == 1
+        for layer in self.token_layers:
+            resolved_idx = self._resolve_hidden_state_index(layer, len(hidden_states))
+            pack[self._layer_key(layer, resolved_idx, single_layer=single_layer)] = hidden_states[resolved_idx]
+        return pack

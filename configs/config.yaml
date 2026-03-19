@@ -34,7 +34,7 @@ runs: 1
 # Wandb settings
 wandb:
   enabled: false
-  project: tinyvit
+  project: stratified-manifold-learning
   name: null  # Auto-generate if null
   tags: []
 
