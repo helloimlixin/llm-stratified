@@ -5,8 +5,11 @@ from typing import Any, Iterable, Optional
 
 try:
     import wandb as wandb_module
-except ImportError:  # pragma: no cover
+except Exception as exc:  # pragma: no cover
     wandb_module = None
+    wandb_import_error = exc
+else:
+    wandb_import_error = None
 
 
 def init_wandb_run(
@@ -22,7 +25,8 @@ def init_wandb_run(
     if not enabled:
         return None
     if wandb_module is None:
-        print(missing_message)
+        suffix = f" ({wandb_import_error})" if wandb_import_error is not None else ""
+        print(f"{missing_message}{suffix}")
         return None
 
     try:

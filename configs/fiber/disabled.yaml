@@ -3,6 +3,8 @@ enabled: false
 embed_interval: 10
 max_tokens: 1024
 embed_full_val: false
+embedding_animation: false
+embedding_animation_fps: 4
 
 # Stratification parameters (unused when disabled)
 vol_min: 8

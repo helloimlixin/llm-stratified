@@ -46,6 +46,15 @@ class DummyDinoProbeModel(torch.nn.Module):
         return {"tokens": packed, "patch_embeddings": packed.clone()}
 
 
+class DummyDinoMultiLayerProbeModel(DummyDinoProbeModel):
+    def forward_feature_pack(self, imgs):
+        batch_size = imgs.shape[0]
+        prefix = torch.full((batch_size, 2, 3), -1.0)
+        patches = torch.arange(batch_size * 4 * 3, dtype=torch.float32).reshape(batch_size, 4, 3)
+        packed = torch.cat([prefix, patches], dim=1)
+        return {"tokens_layer_03": packed, "tokens_layer_last": packed.clone(), "patch_embeddings": packed.clone()}
+
+
 class TestCollectRepresentations(unittest.TestCase):
     def _make_loader(self):
         imgs = torch.randn(2, 3, 4, 4)
@@ -82,6 +91,23 @@ class TestCollectRepresentations(unittest.TestCase):
         )
 
         self.assertEqual(reps["tokens"].shape[0], 8)
+        self.assertEqual(reps["patch_embeddings"].shape[0], 8)
+
+    def test_multilayer_token_representations_strip_prefix_tokens(self):
+        reps, _ = collect_representations(
+            model=DummyDinoMultiLayerProbeModel(),
+            loader=self._make_loader(),
+            device=torch.device("cpu"),
+            dataset="FAKEDATA",
+            patch_size=2,
+            pixel_patch_stride=None,
+            max_tokens=32,
+            show_progress=False,
+            viz_images=0,
+        )
+
+        self.assertEqual(reps["tokens_layer_03"].shape[0], 8)
+        self.assertEqual(reps["tokens_layer_last"].shape[0], 8)
         self.assertEqual(reps["patch_embeddings"].shape[0], 8)
 
 

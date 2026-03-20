@@ -113,6 +113,21 @@ It uses `Food101` by default and downloads DINOv2 weights on the first run.
 python src/train.py +experiment=dinov2_continuity data.root=./data
 ```
 
+Cluster / Singularity launch (mirrors the `../laser` workflow, keeps W&B online if `/scratch/$USER/.secrets/wandb_api_key` exists, and writes `sbatch` logs to `runs/slurm_logs/`):
+
+```bash
+scripts/launch_dinov2_continuity_slurm.sh
+```
+
+Common overrides:
+
+```bash
+EXPERIMENT=dinov2_continuity_flowers \
+DATA_ROOT=/cache/home/xl598/Projects/data \
+WANDB_NAME=dinov2_flowers_online \
+scripts/launch_dinov2_continuity_slurm.sh volume_probe.max_tokens=4096
+```
+
 ### Hydra quick test (sanity check)
 
 ```bash
@@ -204,6 +219,8 @@ python src/imagegpt.py --dataset STL10 --root ./data --img-size 96 --patch-size 
 
 If you re-run experiments and regenerate plots, update/copy the new plots into `docs/imgs/` and keep `docs/RESULTS.md` referencing `imgs/...` paths.
 
+When `fiber.enabled=true`, W&B now also logs an `embeddings/progression` animation that shows the 2D PCA embedding layout evolving across fiber-analysis checkpoints.
+
 ## What gets produced
 
 The run output directory (`hydra.run.dir`) contains:
@@ -214,6 +231,7 @@ The run output directory (`hydra.run.dir`) contains:
 - **Saved visualizations**
   - `fiber_analysis/epoch_XXX_*.png`: token radius curves, token patches, low/high-dim panels, token-slot counts, patch-count curves, etc.
   - `class_dims_epoch_XXX.png`: class-wise dimension summary at checkpoints
+  - `embedding_progression.gif`: 2D PCA animation across fiber-analysis checkpoints when `fiber.embedding_animation=true`
 
 `docs/RESULTS.md` embeds a curated subset of these plots across epochs (and copies the necessary assets into `docs/imgs/` for GitHub rendering).
 
@@ -240,6 +258,8 @@ training.epochs=...     Number of training epochs
 fiber=<name>            Fiber config group (basic, polysemy, vit_polysemy, disabled)
 fiber.embed_interval=... Save/checkpoint cadence for embedding + fiber plots
 fiber.max_tokens=...    Cap number of token embeddings used for visuals
+fiber.embedding_animation=true   Save/log a GIF of embedding progression
+fiber.embedding_animation_fps=4  Playback speed for the embedding GIF
 data.subset_train=...   Optional training subset size
 data.subset_test=...    Optional test subset size
 hydra.run.dir=...       Output directory (writes runs + plots)

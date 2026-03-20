@@ -10,6 +10,8 @@ class FiberConfig:
     embed_interval: int = 10
     max_tokens: int = 1024
     embed_full_val: bool = False
+    embedding_animation: bool = True
+    embedding_animation_fps: int = 4
     vol_min: int = 8
     vol_max: int = 64
     ws: int = 8

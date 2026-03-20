@@ -1,5 +1,6 @@
 """Shared utilities for TinyViT and fiber bundle analysis."""
 
+from collections.abc import Mapping
 import os
 import random
 
@@ -7,6 +8,11 @@ import numpy as np
 import torch
 
 from data import get_norm_stats
+
+try:
+    from omegaconf import OmegaConf
+except ImportError:  # pragma: no cover
+    OmegaConf = None
 
 
 def seed_everything(seed: int = 1337) -> None:
@@ -39,9 +45,19 @@ def denormalize_images(imgs: torch.Tensor, dataset: str) -> torch.Tensor:
 
 def to_serializable(obj):
     """Convert numpy/torch types to JSON-serializable Python types."""
+    if OmegaConf is not None:
+        try:
+            if OmegaConf.is_config(obj):
+                return to_serializable(OmegaConf.to_container(obj, resolve=True))
+        except Exception:
+            pass
+    if isinstance(obj, Mapping):
+        return {k: to_serializable(v) for k, v in obj.items()}
     if isinstance(obj, dict):
         return {k: to_serializable(v) for k, v in obj.items()}
     if isinstance(obj, list):
+        return [to_serializable(v) for v in obj]
+    if isinstance(obj, tuple):
         return [to_serializable(v) for v in obj]
     if isinstance(obj, np.ndarray):
         return obj.tolist()

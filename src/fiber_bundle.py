@@ -331,6 +331,77 @@ def project_embeddings_3d(embeddings: torch.Tensor) -> np.ndarray:
     return (centered @ v[:, :3]).cpu().numpy()
 
 
+def project_embeddings_2d(
+    embeddings: torch.Tensor,
+    *,
+    mean: torch.Tensor | None = None,
+    basis: torch.Tensor | None = None,
+) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
+    emb = embeddings.detach().float().cpu()
+    if emb.ndim != 2:
+        raise ValueError("embeddings must be rank-2 for 2D projection")
+    feat_dim = emb.shape[1]
+    if mean is None:
+        mean = emb.mean(dim=0, keepdim=True) if emb.shape[0] else torch.zeros((1, feat_dim), dtype=emb.dtype)
+    centered = emb - mean
+    if basis is None:
+        rank = min(2, centered.shape[0], centered.shape[1])
+        if rank > 0:
+            _, _, v = torch.pca_lowrank(centered, q=rank)
+            basis = v[:, :rank]
+        else:
+            basis = torch.zeros((feat_dim, 0), dtype=emb.dtype)
+    coords = centered @ basis if basis.numel() else torch.zeros((emb.shape[0], 0), dtype=emb.dtype)
+    if coords.shape[1] < 2:
+        coords = torch.cat([coords, torch.zeros((coords.shape[0], 2 - coords.shape[1]), dtype=emb.dtype)], dim=1)
+    return coords[:, :2].numpy(), mean, basis
+
+
+def _labels_to_animation_classes(labels: torch.Tensor) -> np.ndarray:
+    lbl = labels.detach().cpu()
+    if lbl.ndim == 0:
+        return np.asarray([int(lbl.item())], dtype=np.int64)
+    if lbl.ndim == 1:
+        return lbl.to(torch.int64).numpy().reshape(-1)
+    if lbl.ndim == 2:
+        if lbl.shape[1] == 0:
+            return np.full((lbl.shape[0],), -1, dtype=np.int64)
+        positive = lbl > 0
+        has_positive = positive.any(dim=1)
+        classes = torch.argmax(lbl, dim=1).to(torch.int64)
+        classes = torch.where(has_positive, classes, torch.full_like(classes, -1))
+        return classes.numpy()
+    flat = lbl.reshape(lbl.shape[0], -1)
+    return flat[:, 0].to(torch.int64).numpy()
+
+
+def build_embedding_animation_frames(
+    snapshots: list[tuple[int, torch.Tensor, torch.Tensor]],
+) -> list[dict[str, Any]]:
+    if not snapshots:
+        return []
+    reference_embeddings = next(
+        (
+            embeddings
+            for _epoch, embeddings, _labels in reversed(snapshots)
+            if embeddings.ndim == 2 and embeddings.shape[0] > 0 and embeddings.shape[1] > 0
+        ),
+        snapshots[-1][1],
+    )
+    _, final_mean, final_basis = project_embeddings_2d(reference_embeddings)
+
+    frames: list[dict[str, Any]] = []
+    for epoch, embeddings, labels in snapshots:
+        coords2d, _, _ = project_embeddings_2d(embeddings, mean=final_mean, basis=final_basis)
+        class_ids = _labels_to_animation_classes(labels)
+        n_points = min(coords2d.shape[0], class_ids.shape[0])
+        if n_points == 0:
+            continue
+        encodings = np.column_stack((coords2d[:n_points, 0], coords2d[:n_points, 1], class_ids[:n_points]))
+        frames.append({"epoch": int(epoch), "encodings": encodings})
+    return frames
+
+
 def tsne_embeddings_3d(embeddings: torch.Tensor, perplexity: float = 30.0, seed: int = 42, max_points: int = 2048) -> tuple[np.ndarray, np.ndarray] | None:
     if not HAS_TSNE:
         return None
@@ -1133,6 +1204,96 @@ def plot_progress(train_history: List[Dict], fiber_history: List[Dict], final_co
     ax3.set_title("Embeddings (PCA 3D)"); ax3.set_xticks([]); ax3.set_yticks([]); ax3.set_zticks([])
     fig.colorbar(sc, ax=ax3, shrink=0.6, label="dim")
     fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
+
+
+def _plot_embedding_animation_frame(
+    ax,
+    data: np.ndarray,
+    frame_title: str,
+    *,
+    x_lim: tuple[float, float] | None = None,
+    y_lim: tuple[float, float] | None = None,
+) -> None:
+    plt_mod = _require_matplotlib()
+    if data.size == 0:
+        ax.set_title(frame_title)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        return
+
+    coords = np.asarray(data[:, :2], dtype=np.float64)
+    class_ids = np.asarray(data[:, 2], dtype=np.int64)
+    finite = np.isfinite(coords).all(axis=1)
+    coords = coords[finite]
+    class_ids = class_ids[finite]
+    order = np.argsort(class_ids, kind="mergesort")
+    coords = coords[order]
+    class_ids = class_ids[order]
+
+    labels = np.unique(class_ids)
+    cmap = plt_mod.get_cmap("tab20", max(1, min(20, len(labels))))
+    for idx, label in enumerate(labels.tolist()):
+        mask = class_ids == label
+        color = "#808080" if label < 0 else cmap(idx % getattr(cmap, "N", 20))
+        ax.scatter(coords[mask, 0], coords[mask, 1], label=str(int(label)), alpha=0.8, s=8, c=[color], linewidths=0)
+
+    ax.set_title(frame_title)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.grid(alpha=0.2, linewidth=0.5)
+    if x_lim is not None:
+        ax.set_xlim(x_lim)
+    if y_lim is not None:
+        ax.set_ylim(y_lim)
+    if len(labels) <= 12:
+        ax.legend(loc="best", fontsize=8, markerscale=1.5, frameon=True)
+
+
+def generate_embedding_animation(
+    encodings: list[dict[str, Any]],
+    title: str = "Embedding Space Progression",
+    *,
+    output_path: str | Path = "results/embedding_progression.gif",
+    fps: int = 4,
+) -> Path:
+    plt_mod = _require_matplotlib()
+    if not encodings:
+        raise ValueError("encodings must contain at least one frame")
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    arrays = [np.asarray(frame["encodings"], dtype=np.float64) for frame in encodings]
+    nonempty = [frame for frame in arrays if frame.size]
+    if nonempty:
+        all_x = np.concatenate([frame[:, 0] for frame in nonempty], axis=0)
+        all_y = np.concatenate([frame[:, 1] for frame in nonempty], axis=0)
+        x_margin = (all_x.max() - all_x.min()) * 0.05 or 0.1
+        y_margin = (all_y.max() - all_y.min()) * 0.05 or 0.1
+        x_lim = (float(all_x.min() - x_margin), float(all_x.max() + x_margin))
+        y_lim = (float(all_y.min() - y_margin), float(all_y.max() + y_margin))
+    else:
+        x_lim = y_lim = None
+
+    fig, ax = plt_mod.subplots(figsize=(8, 6))
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    def update(frame_idx: int) -> None:
+        ax.clear()
+        frame = encodings[frame_idx]
+        frame_epoch = int(frame.get("epoch", frame_idx))
+        _plot_embedding_animation_frame(
+            ax,
+            arrays[frame_idx],
+            f"{title} at Epoch {frame_epoch}",
+            x_lim=x_lim,
+            y_lim=y_lim,
+        )
+
+    anim = FuncAnimation(fig, update, frames=len(encodings), interval=max(1, int(1000 / max(1, fps))))
+    anim.save(path, writer=PillowWriter(fps=max(1, fps)))
+    plt_mod.close(fig)
+    return path
 
 
 def make_embedding_figure_3d(coords3d: np.ndarray, dims: np.ndarray, title: str = "Embeddings (PCA 3D)") -> plt.Figure:

@@ -76,7 +76,7 @@ def _flatten_token_tensor(tokens: torch.Tensor, prefix_tokens: int) -> torch.Ten
 
 
 def _representation_prefix_tokens(model: torch.nn.Module, rep_name: str) -> int:
-    if rep_name == "tokens":
+    if rep_name == "tokens" or rep_name.startswith("tokens_"):
         return _resolve_prefix_tokens(model)
     if rep_name == "patch_embeddings" and bool(getattr(model, "patch_embeddings_include_prefix_tokens", False)):
         return _resolve_prefix_tokens(model)

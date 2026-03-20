@@ -221,6 +221,7 @@ def run_training(
             )
 
         train_history, fiber_history = [], []
+        embedding_animation_snapshots: list[tuple[int, torch.Tensor, torch.Tensor]] = []
         final_dims = final_coords_3d = final_tsne_3d = None
 
         if is_main_process:
@@ -401,6 +402,10 @@ def run_training(
                     )
                     print(f"[fiber] Epoch {epoch:03d}: done in {time.time() - t1:.1f}s", flush=True)
                     fiber_history.append(analysis["fiber_summary"])
+                    if fiber_cfg.embedding_animation:
+                        embedding_animation_snapshots.append(
+                            (epoch, embeddings.detach().cpu().clone(), labels.detach().cpu().clone())
+                        )
                     final_dims, final_coords_3d, final_tsne_3d = (
                         analysis["final_dims"],
                         analysis["final_coords_3d"],
@@ -434,7 +439,7 @@ def run_training(
 
         # Save histories
         if fiber_cfg.enabled and is_main_process and run_dir:
-            from fiber_bundle import plot_progress
+            from fiber_bundle import build_embedding_animation_frames, generate_embedding_animation, plot_progress
 
             with open(run_dir / "train_history.json", "w") as fp:
                 json.dump(train_history, fp, indent=2)
@@ -449,6 +454,29 @@ def run_training(
                     run_dir / "fiber_bundle_summary.png",
                 )
                 print(f"Saved summary plot -> {run_dir / 'fiber_bundle_summary.png'}")
+            if fiber_cfg.embedding_animation and embedding_animation_snapshots:
+                try:
+                    animation_frames = build_embedding_animation_frames(embedding_animation_snapshots)
+                    if not animation_frames:
+                        print("[embedding_animation] skipped: no non-empty frames")
+                    else:
+                        animation_path = generate_embedding_animation(
+                            animation_frames,
+                            title=f"{dataset_name} Embedding Space",
+                            output_path=run_dir / "embedding_progression.gif",
+                            fps=fiber_cfg.embedding_animation_fps,
+                        )
+                        print(f"Saved embedding animation -> {animation_path}")
+                        if wandb_on and wandb and hasattr(wandb, "Video"):
+                            wandb.log(
+                                {
+                                    "embeddings/progression": wandb.Video(str(animation_path), format="gif"),
+                                    "embeddings/progression_frames": len(animation_frames),
+                                },
+                                step=int(animation_frames[-1].get("epoch", max(0, num_epochs - 1))),
+                            )
+                except Exception as e:
+                    print(f"[embedding_animation] failed: {e}")
 
     # Cleanup
     if wandb_on and is_main_process:
