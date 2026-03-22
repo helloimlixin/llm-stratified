@@ -7,3 +7,4 @@ label_smoothing: 0.0
 warmup_epochs: 5
 cosine_schedule: true
 save_interval: 10
+progress_log_interval: 0

@@ -1,0 +1,29 @@
+# @package _global_
+# Starter COCO fiber-analysis run on the real dataset.
+# Keeps num_workers=0 by default to avoid slow worker startup with COCO metadata.
+defaults:
+  - override /data: coco
+  - override /model: tinyvit
+  - override /training: fast
+  - override /fiber: basic
+
+data:
+  img_size: 224
+  batch_size: 16
+  batch_size_test: 16
+  num_workers: 0
+  subset_train: null
+  subset_test: 256
+
+model:
+  patch_size: 16
+
+fiber:
+  embed_interval: 2
+  max_tokens: 1536
+  embedding_animation: false
+
+wandb:
+  enabled: false
+  tags: [coco, fiber-analysis]
+

@@ -1,6 +1,12 @@
 # Results for Fiber Bundle Tests on TinyVIT
 
-This report summarizes the TinyVIT training experiments on the STL10 dataset, run with fiber bundle tests every 10 epochs.
+This report summarizes the TinyVIT training experiments on the STL10 dataset, run with fiber bundle tests every 10 epochs. The intended interpretation is stratified rather than classically manifold-based: even though image data live in a continuous ambient pixel space, the learned image representation is allowed to have **nonuniform local dimension** and **locally distinct strata**.
+
+## Framing
+
+- These experiments do **not** assume that natural images lie on one smooth low-dimensional manifold.
+- Instead, they test whether local neighborhoods behave more like a stratified space, where dimension can vary across nearby regions and across radius scales.
+- Low irregularity is therefore evidence of smoother local geometry, not proof that the representation has become a single manifold.
 
 
 ## Run configuration
@@ -88,6 +94,7 @@ Fiber diagnostics are computed and saved at the same checkpoint cadence as `fibe
 - **Dimensionality growth**: `mean_dim` increases rapidly early (**6.44 → 8.91** by epoch 19) and then slows toward a plateau (**11.25 @ 99 → 11.59 @ 199**). `mean_neigh_dim` tracks closely with `mean_dim` throughout.
 - **Irregularity behavior**: `irregular_ratio` starts highest at epoch 0 (**0.0885**) and is generally lower afterward, with the lowest value at epoch 179 (**0.0434**). In this run, irregularity does **not** show a sustained upward drift as training proceeds.
 - **Coupling with accuracy**: Across the checkpoint epochs in this table, `mean_dim` has a **positive correlation** with `val_acc` (Pearson \(r \approx 0.69\)), while `irregular_ratio` and `mean_irregularity` are **negatively correlated** with `val_acc` (\(r \approx -0.84\) and \(r \approx -0.83\), respectively).
+- **Stratified interpretation**: The representation appears to become more regular over training, but this should not be read as recovery of the classical manifold hypothesis. The relevant question is whether local dimension changes become milder and more organized, not whether local dimension becomes globally uniform.
 
 ---
 

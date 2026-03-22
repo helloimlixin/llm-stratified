@@ -22,14 +22,15 @@ defaults:
 # Output directory (Hydra will create timestamped subdirs)
 hydra:
   run:
-    dir: runs/hydra/${data.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${output_root}/hydra/${data.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
-    dir: runs/hydra/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${output_root}/hydra/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
     subdir: ${hydra.job.num}
 
 # Experiment settings
 seed: 1337
 runs: 1
+output_root: ${oc.env:LLM_STRATIFIED_OUTPUT_ROOT,runs}
 
 # Wandb settings
 wandb:

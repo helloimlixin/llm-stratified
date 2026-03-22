@@ -1,0 +1,28 @@
+# @package _global_
+# Real-data COCO smoke test with fiber analysis.
+# Uses tiny subsets and num_workers=0 because COCO's annotation object is large.
+defaults:
+  - override /data: coco
+  - override /model: tinyvit
+  - override /training: debug
+  - override /fiber: basic
+
+data:
+  img_size: 96
+  batch_size: 8
+  batch_size_test: 8
+  num_workers: 0
+  subset_train: 16
+  subset_test: 8
+
+model:
+  patch_size: 16
+
+fiber:
+  embed_interval: 1
+  max_tokens: 64
+  embedding_animation: false
+
+wandb:
+  enabled: false
+
