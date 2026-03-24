@@ -15,6 +15,7 @@ defaults:
   - data: cifar10
   - training: default
   - fiber: disabled
+  - sam_fiber: disabled
   - volume_probe: disabled
   - compute: single_gpu
   - _self_

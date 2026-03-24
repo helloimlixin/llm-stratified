@@ -1,0 +1,31 @@
+# @package _global_
+# Frozen SAM segmentation backbone + COCO fiber-bundle analysis with the
+# same W&B logging surface as the standard fiber runs.
+defaults:
+  - override /data: coco
+  - override /model: tinyvit
+  - override /training: debug
+  - override /fiber: disabled
+  - override /sam_fiber: basic
+  - override /volume_probe: disabled
+
+data:
+  img_size: 224
+  batch_size_test: 4
+  num_workers: 0
+  subset_train: null
+  subset_test: 128
+
+sam_fiber:
+  model_name: facebook/sam-vit-base
+  epochs: 100
+  resample_each_epoch: true
+  analysis_patch_size: 16
+  max_tokens: 1536
+  max_boxes_per_image: 16
+  mask_preview_images: 6
+
+wandb:
+  enabled: true
+  project: stratified-manifold-learning
+  tags: [sam, segmentation, coco, fiber-analysis]

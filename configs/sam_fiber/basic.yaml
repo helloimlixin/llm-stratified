@@ -1,0 +1,20 @@
+# Frozen SAM image-encoder fiber probe with box-prompted COCO masks.
+enabled: true
+model_name: facebook/sam-vit-base
+epochs: 1
+resample_each_epoch: true
+max_tokens: 1536
+analysis_patch_size: 16
+vol_min: 8
+vol_max: 64
+ws: 8
+alpha: 0.005
+nstrat: 3
+neighborhood_size: null
+progress: true
+mask_threshold: 0.25
+max_boxes_per_image: 16
+mask_preview_images: 6
+multimask_output: false
+embedding_animation: true
+embedding_animation_fps: 1

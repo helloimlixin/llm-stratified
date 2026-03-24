@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from training.configs import build_volume_probe_config
+from training.configs import build_sam_fiber_config, build_volume_probe_config
 from training.runner import run_training
+from training.wandb_utils import resolve_wandb_name
 from utils import resolve_ddp_settings
 
 
@@ -19,7 +20,13 @@ class OutputPaths:
     volume_probe_dir: Path
 
 
-def prepare_output_paths(paths_cfg: Any, output_dir: Path, *, fiber_enabled: bool) -> OutputPaths:
+def prepare_output_paths(
+    paths_cfg: Any,
+    output_dir: Path,
+    *,
+    fiber_enabled: bool,
+    sam_fiber_enabled: bool = False,
+) -> OutputPaths:
     paths = OutputPaths(
         output_dir=output_dir,
         checkpoints_dir=output_dir / paths_cfg.checkpoints,
@@ -28,17 +35,47 @@ def prepare_output_paths(paths_cfg: Any, output_dir: Path, *, fiber_enabled: boo
         volume_probe_dir=output_dir / paths_cfg.volume_probe,
     )
     paths.checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    if fiber_enabled:
+    if fiber_enabled or sam_fiber_enabled:
         paths.embeddings_dir.mkdir(parents=True, exist_ok=True)
         paths.analysis_dir.mkdir(parents=True, exist_ok=True)
     return paths
 
 
-def resolve_wandb_name(cfg: Any, *, suffix: str = "") -> str:
-    if cfg.wandb.name:
-        return str(cfg.wandb.name)
-    base_name = f"{cfg.data.name}_{cfg.model.name}"
-    return f"{base_name}_{suffix}" if suffix else base_name
+def maybe_run_sam_fiber(cfg: Any, paths: OutputPaths) -> bool:
+    sam_fiber_cfg = build_sam_fiber_config(cfg.sam_fiber)
+    if not sam_fiber_cfg.enabled:
+        return False
+
+    from training.sam_fiber_job import run_sam_fiber_job
+
+    if int(os.environ.get("RANK", "0")) != 0:
+        return True
+
+    results = run_sam_fiber_job(
+        dataset_name=cfg.data.name,
+        root=cfg.data.root,
+        img_size=cfg.data.img_size,
+        batch_size_test=cfg.data.batch_size_test,
+        num_workers=cfg.data.num_workers,
+        subset_test=cfg.data.subset_test,
+        seed=cfg.seed,
+        output_dir=paths.output_dir,
+        checkpoints_dir=paths.checkpoints_dir,
+        embeddings_dir=paths.embeddings_dir,
+        analysis_dir=paths.analysis_dir,
+        sam_cfg=sam_fiber_cfg,
+        wandb_enabled=cfg.wandb.enabled,
+        wandb_project=cfg.wandb.project,
+        wandb_name=resolve_wandb_name(cfg, suffix="sam_fiber"),
+        wandb_tags=getattr(cfg.wandb, "tags", None),
+    )
+    print(f"\nSAM fiber probe complete! Results saved to: {paths.output_dir}")
+    summary_path = paths.output_dir / "sam_fiber_summary.json"
+    if summary_path.exists():
+        print(f"SAM fiber summary: {summary_path}")
+    if results:
+        print(f"Collected tokens: {results.get('collection', {}).get('num_tokens', 'n/a')}")
+    return True
 
 
 def maybe_run_volume_probe(cfg: Any, paths: OutputPaths) -> bool:
@@ -103,6 +140,7 @@ def run_training_from_cfg(cfg: Any, paths: OutputPaths, fiber_cfg: Any) -> None:
         lr=cfg.training.lr,
         wd=cfg.training.weight_decay,
         grad_clip=cfg.training.grad_clip,
+        progress_log_interval=cfg.training.progress_log_interval,
         base_dir=str(paths.checkpoints_dir),
         seed_base=cfg.seed,
         num_workers=cfg.data.num_workers,

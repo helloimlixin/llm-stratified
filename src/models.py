@@ -1,9 +1,10 @@
-"""Model definitions for TinyViT, timm wrappers, and frozen DINO feature extractors."""
+"""Model definitions for TinyViT, timm wrappers, and frozen feature extractors."""
 
 from __future__ import annotations
 
 from typing import Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,10 +15,12 @@ except ImportError:
     timm = None
 
 try:
-    from transformers import AutoImageProcessor, AutoModel
+    from transformers import AutoImageProcessor, AutoModel, SamModel, SamProcessor
 except ImportError:
     AutoImageProcessor = None
     AutoModel = None
+    SamModel = None
+    SamProcessor = None
 
 from utils import denormalize_images
 
@@ -25,6 +28,7 @@ __all__ = [
     "DinoV2Wrapper",
     "PatchEmbed",
     "MlpBlock",
+    "SamBackboneWrapper",
     "TransformerBlock",
     "TinyViT",
     "resolve_patch_size",
@@ -278,3 +282,115 @@ class DinoV2Wrapper(nn.Module):
             resolved_idx = self._resolve_hidden_state_index(layer, len(hidden_states))
             pack[self._layer_key(layer, resolved_idx, single_layer=single_layer)] = hidden_states[resolved_idx]
         return pack
+
+
+class SamBackboneWrapper(nn.Module):
+    """Frozen SAM image encoder wrapper with optional box-prompted mask prediction."""
+
+    def __init__(self, model_name: str = "facebook/sam-vit-base"):
+        super().__init__()
+        if SamModel is None or SamProcessor is None:
+            raise ImportError("transformers is required for SAM probing; pip install transformers")
+
+        self.model_name = model_name
+        self.processor = SamProcessor.from_pretrained(model_name)
+        self.backbone = SamModel.from_pretrained(model_name)
+        self.backbone.eval()
+        for param in self.backbone.parameters():
+            param.requires_grad_(False)
+
+        self.num_prefix_tokens = 0
+        self.embed_dim = int(getattr(self.backbone.config, "output_channels", 256))
+        vision_cfg = getattr(self.backbone.config, "vision_config", None)
+        prompt_cfg = getattr(self.backbone.config, "prompt_encoder_config", None)
+        self.patch_size = int(
+            getattr(prompt_cfg, "patch_size", getattr(vision_cfg, "patch_size", 16))
+        )
+        image_processor = getattr(self.processor, "image_processor", self.processor)
+        self.expected_image_size = _resolve_processor_size(image_processor, vision_cfg or self.backbone.config)
+        self.image_mean = tuple(float(x) for x in getattr(image_processor, "image_mean", (0.485, 0.456, 0.406)))
+        self.image_std = tuple(float(x) for x in getattr(image_processor, "image_std", (0.229, 0.224, 0.225)))
+
+    def _image_numpy(self, img: torch.Tensor, dataset_name: str) -> tuple[np.ndarray, torch.Tensor]:
+        img01 = denormalize_images(img.unsqueeze(0), dataset_name).squeeze(0).detach().cpu()
+        np_img = img01.permute(1, 2, 0).numpy()
+        return np_img, img01
+
+    def prepare_single_image(self, img: torch.Tensor, dataset_name: str, *, device: torch.device) -> tuple[dict, torch.Tensor]:
+        np_img, img01 = self._image_numpy(img, dataset_name)
+        inputs = self.processor(images=[np_img], return_tensors="pt", do_rescale=False)
+        inputs = inputs.to(device)
+        return inputs, img01
+
+    def prepare_images_for_features(
+        self,
+        imgs: torch.Tensor,
+        dataset_name: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        np_imgs = []
+        img_list = []
+        for img in imgs:
+            np_img, img01 = self._image_numpy(img, dataset_name)
+            np_imgs.append(np_img)
+            img_list.append(img01)
+        inputs = self.processor(images=np_imgs, return_tensors="pt", do_rescale=False)
+        return inputs["pixel_values"].to(imgs.device), torch.stack(img_list, dim=0).to(imgs.device)
+
+    def get_image_embedding_map(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        return self.backbone.get_image_embeddings(pixel_values)
+
+    def forward_feature_pack(self, pixel_values: torch.Tensor) -> dict[str, torch.Tensor]:
+        embedding_map = self.get_image_embedding_map(pixel_values)
+        tokens = embedding_map.flatten(2).transpose(1, 2)
+        return {"tokens": tokens}
+
+    @torch.no_grad()
+    def predict_masks_for_boxes(
+        self,
+        *,
+        img: torch.Tensor,
+        dataset_name: str,
+        boxes: list[list[float]],
+        device: torch.device,
+        image_embeddings: torch.Tensor | None = None,
+        multimask_output: bool = False,
+    ) -> list[torch.Tensor]:
+        if not boxes:
+            return []
+
+        np_img, _img01 = self._image_numpy(img, dataset_name)
+        inputs = self.processor(
+            images=[np_img],
+            input_boxes=[boxes],
+            return_tensors="pt",
+            do_rescale=False,
+        ).to(device)
+        if image_embeddings is None:
+            image_embeddings = self.get_image_embedding_map(inputs["pixel_values"])
+
+        outputs = self.backbone(
+            image_embeddings=image_embeddings,
+            input_boxes=inputs["input_boxes"],
+            multimask_output=multimask_output,
+        )
+        masks = self.processor.image_processor.post_process_masks(
+            outputs.pred_masks.detach().cpu(),
+            inputs["original_sizes"].detach().cpu(),
+            inputs["reshaped_input_sizes"].detach().cpu(),
+        )
+        if not masks:
+            return []
+
+        mask_batch = masks[0]
+        if isinstance(mask_batch, (list, tuple)):
+            return [torch.as_tensor(mask, dtype=torch.float32).squeeze() for mask in mask_batch]
+
+        mask_tensor = torch.as_tensor(mask_batch, dtype=torch.float32)
+        if mask_tensor.ndim == 4:
+            if mask_tensor.shape[1] == 1:
+                mask_tensor = mask_tensor.squeeze(1)
+            else:
+                mask_tensor = mask_tensor[:, 0]
+        elif mask_tensor.ndim == 2:
+            mask_tensor = mask_tensor.unsqueeze(0)
+        return [mask_tensor[i].squeeze() for i in range(mask_tensor.shape[0])]

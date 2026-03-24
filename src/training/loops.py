@@ -47,6 +47,28 @@ def _maybe_progress(loader, *, desc: str, enabled: bool):
     return loader
 
 
+def _log_interval_progress(
+    *,
+    phase: str,
+    dataset_name: str,
+    epoch: int,
+    step: int,
+    total_steps: Optional[int],
+    total_loss: float,
+    total_acc: float,
+    total_items: int,
+) -> None:
+    if total_items <= 0:
+        return
+    total_steps_str = str(total_steps) if total_steps is not None else "?"
+    avg_loss, avg_acc = _finalize_epoch(total_loss, total_acc, total_items)
+    print(
+        f"[{dataset_name}] {phase} {epoch:03d} step {step}/{total_steps_str} | "
+        f"loss {avg_loss:.4f} | acc {avg_acc:.4f}",
+        flush=True,
+    )
+
+
 @torch.no_grad()
 def multilabel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
     return _accuracy_from_logits(logits, targets, "multilabel").item()
@@ -63,13 +85,16 @@ def train_one_epoch(
     label_smoothing: float = 0.0,
     epoch: int = 0,
     sampler: Optional[DistributedSampler] = None,
+    log_interval: int = 0,
+    dataset_name: str = "dataset",
 ) -> Tuple[float, float]:
     model.train()
     criterion = get_criterion(task_type, label_smoothing)
     if sampler is not None:
         sampler.set_epoch(epoch)
     total_loss, total_acc, total = 0.0, 0.0, 0
-    for batch in loader:
+    total_steps = len(loader) if hasattr(loader, "__len__") else None
+    for step, batch in enumerate(loader, start=1):
         imgs, labels = _prepare_batch(batch, device, task_type, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device_type=device.type, enabled=(device.type == "cuda")):
@@ -92,6 +117,17 @@ def train_one_epoch(
             total_loss += loss.item() * bs
             total_acc += _accuracy_from_logits(logits, labels, task_type).item() * bs
             total += bs
+        if log_interval > 0 and step % log_interval == 0:
+            _log_interval_progress(
+                phase="Train",
+                dataset_name=dataset_name,
+                epoch=epoch,
+                step=step,
+                total_steps=total_steps,
+                total_loss=total_loss,
+                total_acc=total_acc,
+                total_items=total,
+            )
     return _finalize_epoch(total_loss, total_acc, total)
 
 
@@ -102,12 +138,16 @@ def evaluate(
     device: torch.device,
     task_type: str = "multiclass",
     label_smoothing: float = 0.0,
+    epoch: int = 0,
+    log_interval: int = 0,
+    dataset_name: str = "dataset",
 ) -> Tuple[float, float]:
     model.eval()
     criterion = get_criterion(task_type, label_smoothing)
     total_loss, total_acc, total = 0.0, 0.0, 0
+    total_steps = len(loader) if hasattr(loader, "__len__") else None
     with torch.inference_mode():
-        for batch in loader:
+        for step, batch in enumerate(loader, start=1):
             imgs, labels = _prepare_batch(batch, device, task_type, non_blocking=True)
             logits = model(imgs)
             loss = criterion(logits, labels)
@@ -115,6 +155,17 @@ def evaluate(
             total_loss += loss.item() * bs
             total_acc += _accuracy_from_logits(logits, labels, task_type).item() * bs
             total += bs
+            if log_interval > 0 and step % log_interval == 0:
+                _log_interval_progress(
+                    phase="Eval",
+                    dataset_name=dataset_name,
+                    epoch=epoch,
+                    step=step,
+                    total_steps=total_steps,
+                    total_loss=total_loss,
+                    total_acc=total_acc,
+                    total_items=total,
+                )
     return _finalize_epoch(total_loss, total_acc, total)
 
 

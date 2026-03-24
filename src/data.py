@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -12,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler, Subset
 import torch.distributed as dist
 import torchvision
 import torchvision.transforms as T
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 __all__ = [
     "FlatImageDataset",
@@ -132,6 +133,8 @@ class COCO2017MultiLabel(Dataset):
 
     def __init__(self, *, img_dir: Path, ann_file: Path, transform=None, classes=None, cat_id_to_idx=None):
         self.img_dir, self.transform = Path(img_dir), transform
+        self._decode_failures: set[int] = set()
+        self._warned_failures: set[int] = set()
         with open(ann_file, "r") as fp:
             data = json.load(fp)
         cats = data.get("categories", [])
@@ -188,13 +191,49 @@ class COCO2017MultiLabel(Dataset):
     def __len__(self) -> int:
         return len(self.items)
 
+    def _load_rgb_image(self, idx: int):
+        path = self.img_dir / self.items[idx][1]
+        for attempt in range(3):
+            try:
+                with Image.open(path) as img:
+                    return img.convert("RGB")
+            except (FileNotFoundError, OSError, UnidentifiedImageError, ValueError):
+                if attempt < 2:
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                raise
+
+    def _resolve_valid_index(self, idx: int) -> tuple[int, Image.Image]:
+        total = len(self.items)
+        if total <= 0:
+            raise IndexError("COCO dataset is empty")
+
+        last_error: Exception | None = None
+        for offset in range(total):
+            candidate = (int(idx) + offset) % total
+            try:
+                img = self._load_rgb_image(candidate)
+                return candidate, img
+            except (FileNotFoundError, OSError, UnidentifiedImageError, ValueError) as exc:
+                self._decode_failures.add(candidate)
+                if candidate not in self._warned_failures:
+                    print(
+                        f"[data] skipping unreadable COCO image: {self.img_dir / self.items[candidate][1]} ({exc})",
+                        flush=True,
+                    )
+                    self._warned_failures.add(candidate)
+                last_error = exc
+                continue
+
+        raise RuntimeError(f"Unable to decode any COCO images under {self.img_dir}") from last_error
+
     def __getitem__(self, idx: int):
-        _, fn = self.items[idx]
-        img = Image.open(self.img_dir / fn).convert("RGB")
+        resolved_idx, img = self._resolve_valid_index(int(idx))
         y = torch.zeros(len(self.classes), dtype=torch.float32)
-        for j in self.cats_by_pos[idx]:
+        for j in self.cats_by_pos[resolved_idx]:
             y[j] = 1.0
-        return self.transform(img) if self.transform else img, y
+        x = self.transform(img) if self.transform else img
+        return x, y, resolved_idx
 
 
 class VOCMultiLabel(Dataset):
@@ -479,6 +518,8 @@ class WithIndex(Dataset):
     def __getitem__(self, idx: int):
         out = self.dataset[int(idx)]
         img, y = out[0], out[1]
+        if len(out) > 2:
+            return img, y, int(out[2])
         gidx, base = int(idx), self.dataset
         while isinstance(base, Subset):
             gidx = int(base.indices[gidx])

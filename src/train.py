@@ -89,7 +89,13 @@ def _run_hydra(cfg: Any) -> None:
     from hydra.core.hydra_config import HydraConfig
     from omegaconf import OmegaConf
 
-    from training.hydra_app import maybe_run_volume_probe, prepare_output_paths, run_training_from_cfg
+    from training.hydra_app import (
+        maybe_run_sam_fiber,
+        maybe_run_volume_probe,
+        prepare_output_paths,
+        run_training_from_cfg,
+    )
+    from training.wandb_utils import ensure_wandb_dir
 
     # Print resolved config
     print("=" * 60)
@@ -101,11 +107,19 @@ def _run_hydra(cfg: Any) -> None:
     # Get output directory from Hydra
     output_dir = Path(HydraConfig.get().runtime.output_dir)
     print(f"Output directory: {output_dir}")
+    ensure_wandb_dir(enabled=cfg.wandb.enabled, output_dir=output_dir)
 
     fiber_cfg = build_fiber_config(cfg.fiber, patch_size=cfg.model.patch_size)
-    paths = prepare_output_paths(cfg.paths, output_dir, fiber_enabled=fiber_cfg.enabled)
+    paths = prepare_output_paths(
+        cfg.paths,
+        output_dir,
+        fiber_enabled=fiber_cfg.enabled,
+        sam_fiber_enabled=bool(getattr(cfg.sam_fiber, "enabled", False)),
+    )
 
     if maybe_run_volume_probe(cfg, paths):
+        return
+    if maybe_run_sam_fiber(cfg, paths):
         return
 
     run_training_from_cfg(cfg, paths, fiber_cfg)

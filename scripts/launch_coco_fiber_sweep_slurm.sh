@@ -22,6 +22,7 @@ PATCH_CONFIGS="${PATCH_CONFIGS:-16:16:16:1536;32:32:32:2048}"
 WEIGHT_DECAY_VALUES="${WEIGHT_DECAY_VALUES:-0.05}"
 LABEL_SMOOTHING_VALUES="${LABEL_SMOOTHING_VALUES:-0.0}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-2}"
+EXCLUDE_NODES="${EXCLUDE_NODES:-}"
 
 if [[ ! -d "$DATA_ROOT" ]]; then
   echo "Missing data root: $DATA_ROOT" >&2
@@ -115,21 +116,26 @@ export WANDB_ENABLED
 export WANDB_MODE
 export WANDB_PROJECT
 
-JOB_ID="$(sbatch --parsable \
-  --partition="$PARTITION" \
-  --requeue \
-  --job-name="$JOB_NAME" \
-  --array="$ARRAY_SPEC" \
-  --nodes=1 \
-  --ntasks=1 \
-  --cpus-per-task="$CPUS_PER_TASK" \
-  --gres="gpu:${GPUS}" \
-  --mem="$MEM_MB" \
-  --time="$TIME_LIMIT" \
-  --chdir="$SNAPSHOT_REPO" \
-  --output="$LOG_DIR/%x_%A_%a.out" \
-  --error="$LOG_DIR/%x_%A_%a.err" \
-  "$SNAPSHOT_REPO/scripts/run_coco_fiber_job.sh" "$@")"
+SBATCH_ARGS=(
+  --partition="$PARTITION"
+  --requeue
+  --job-name="$JOB_NAME"
+  --array="$ARRAY_SPEC"
+  --nodes=1
+  --ntasks=1
+  --cpus-per-task="$CPUS_PER_TASK"
+  --gres="gpu:${GPUS}"
+  --mem="$MEM_MB"
+  --time="$TIME_LIMIT"
+  --chdir="$SNAPSHOT_REPO"
+  --output="$LOG_DIR/%x_%A_%a.out"
+  --error="$LOG_DIR/%x_%A_%a.err"
+)
+if [[ -n "$EXCLUDE_NODES" ]]; then
+  SBATCH_ARGS+=("--exclude=$EXCLUDE_NODES")
+fi
+
+JOB_ID="$(sbatch --parsable "${SBATCH_ARGS[@]}" "$SNAPSHOT_REPO/scripts/run_coco_fiber_job.sh" "$@")"
 
 echo "Submitted batch job $JOB_ID"
 echo "Snapshot: $SNAPSHOT_REPO"
@@ -141,3 +147,6 @@ echo "Patch configs: $PATCH_CONFIGS"
 echo "Weight decays: $WEIGHT_DECAY_VALUES"
 echo "Label smoothing values: $LABEL_SMOOTHING_VALUES"
 echo "Total jobs: $TOTAL_JOBS"
+if [[ -n "$EXCLUDE_NODES" ]]; then
+  echo "Excluded nodes: $EXCLUDE_NODES"
+fi

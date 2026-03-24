@@ -1,6 +1,6 @@
 # TinyViT — Fiber Bundle Tests
 
-This repo focuses on running **fiber bundle / stratified diagnostics** on a TinyViT-style Vision Transformer, and producing an image-heavy experiment report (`docs/RESULTS.md`) that renders cleanly on GitHub.
+This repo focuses on running **fiber bundle / stratified diagnostics** on a TinyViT-style Vision Transformer, and producing an image-heavy experiment report (`docs/RESULTS.md`) that renders cleanly on GitHub. The working position is not that natural images lie on a single smooth low-dimensional manifold. Instead, even in continuous pixel space, image data are better treated as a **stratified space with nonuniform local dimension**; learned features may smooth or reorganize that structure, but do not remove the need for stratified diagnostics.
 
 Main entry points:
 
@@ -76,7 +76,7 @@ This runs the **same volume/stratification estimator** in three spaces:
 - **`patch_pixels`**: raw pixel patches (flattened RGB patches)
 
 Conceptually: for each point, grow a kNN “sphere” and estimate local scaling / stratification.
-This is a convenient baseline when probing the hypothesis that **image space is “more continuous”** than tokenized text space.
+This is a convenient baseline for testing the stronger claim that **continuous image representations are still not well-described by the classical manifold hypothesis**. Raw patch pixels, patch embeddings, and post-transformer tokens can all exhibit local dimension changes; the question is which representation is most stratified, which is smoothest, and where singular behavior persists.
 
 ```bash
 python src/train.py \
@@ -96,6 +96,8 @@ python src/train.py +experiment=volume_probe data.root=./data
 ```
 
 Outputs go to `runs/hydra/.../volume_probe/volume_summary.json` (includes per-representation `summary` + `knn_curve`) plus per-representation `*_dims.npy`.
+
+See `docs/STRATIFIED_PIXEL_SPACE.md` for the intended interpretation of these probes and a concrete experiment framing.
 
 To log to W&B:
 
@@ -127,6 +129,58 @@ DATA_ROOT=/cache/home/xl598/Projects/data \
 WANDB_NAME=dinov2_flowers_online \
 scripts/launch_dinov2_continuity_slurm.sh volume_probe.max_tokens=4096
 ```
+
+For larger cluster runs or Hydra multiruns, move outputs off the repo tree first:
+
+```bash
+export LLM_STRATIFIED_OUTPUT_ROOT=/scratch/$USER/runs/llm-stratified
+```
+
+When W&B is enabled, local run files default to `<hydra.run.dir>/wandb` unless `WANDB_DIR` is already set.
+
+### COCO 2017 setup
+
+COCO is supported by the loader but is **not** auto-downloaded. The repo expects:
+
+```text
+<data.root>/coco/
+  train2017/
+  val2017/
+  annotations/instances_train2017.json
+  annotations/instances_val2017.json
+```
+
+Use the helper script to download and extract it:
+
+```bash
+scripts/setup_coco2017.sh /scratch/$USER/data
+```
+
+Verify an existing install without downloading:
+
+```bash
+scripts/setup_coco2017.sh --verify-only /scratch/$USER/data
+```
+
+Then run COCO experiments with either dataset alias:
+
+```bash
+python src/train.py data=coco data.root=/scratch/$USER/data
+python src/train.py data=coco2017 data.root=/scratch/$USER/data
+```
+
+Reusable COCO presets:
+
+```bash
+# Validated real-data smoke test
+python src/train.py +experiment=coco_fiber_smoke data.root=/scratch/$USER/data
+
+# Larger starter run on real COCO
+python src/train.py +experiment=coco_fiber data.root=/scratch/$USER/data
+```
+
+For COCO specifically, `data.num_workers=0` is the safest default in this repo.
+The dataset wrapper keeps a large in-memory annotation object, so worker startup can be slow or stall on small/debug runs.
 
 ### Hydra quick test (sanity check)
 

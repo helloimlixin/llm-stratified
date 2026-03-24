@@ -1,0 +1,29 @@
+# @package _global_
+# COCO fiber-analysis training sweep with native TinyViT trained from scratch.
+defaults:
+  - override /data: coco
+  - override /model: tinyvit
+  - override /training: default
+  - override /fiber: basic
+
+data:
+  img_size: 224
+  batch_size: 16
+  batch_size_test: 16
+  num_workers: 0
+  subset_train: null
+  subset_test: 256
+
+model:
+  patch_size: 16
+  timm_model: null
+  timm_pretrained: false
+
+fiber:
+  embed_interval: 2
+  max_tokens: 1536
+  embedding_animation: false
+
+wandb:
+  enabled: true
+  tags: [coco, fiber-analysis, from-scratch, sweep]

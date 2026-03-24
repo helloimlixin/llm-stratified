@@ -30,6 +30,17 @@ from training.model_factory import build_classifier_model
 from training.wandb_utils import finish_wandb_run, init_wandb_run
 
 
+def _make_grad_scaler(device: torch.device):
+    if device.type != "cuda":
+        return None
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        try:
+            return torch.amp.GradScaler("cuda", enabled=True)
+        except TypeError:
+            return torch.amp.GradScaler(enabled=True)
+    return torch.cuda.amp.GradScaler(enabled=True)
+
+
 def run_training(
     dataset_name: str = "CIFAR10",
     root: str = "./data",
@@ -39,6 +50,7 @@ def run_training(
     lr: float = 3e-4,
     wd: float = 0.05,
     grad_clip: Optional[float] = 1.0,
+    progress_log_interval: int = 0,
     base_dir: str = "./runs/tinyvit",
     seed_base: int = 1337,
     num_workers: int = 4,
@@ -212,7 +224,7 @@ def run_training(
             return 1.0
 
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-        scaler = torch.cuda.amp.GradScaler(enabled=True) if (not use_accelerate and device.type == "cuda") else None
+        scaler = _make_grad_scaler(device) if not use_accelerate else None
 
         if use_accelerate:
             train_loader, test_loader = base_train_loader, base_test_loader
@@ -246,8 +258,19 @@ def run_training(
                     label_smoothing,
                     epoch,
                     train_sampler,
+                    log_interval=progress_log_interval,
+                    dataset_name=dataset_name,
                 )
-                eval_loss, eval_acc = evaluate(model, test_loader, device, task, label_smoothing)
+                eval_loss, eval_acc = evaluate(
+                    model,
+                    test_loader,
+                    device,
+                    task,
+                    label_smoothing,
+                    epoch=epoch,
+                    log_interval=progress_log_interval,
+                    dataset_name=dataset_name,
+                )
             scheduler.step()
 
             # Sync metrics for DDP
@@ -472,8 +495,7 @@ def run_training(
                                 {
                                     "embeddings/progression": wandb.Video(str(animation_path), format="gif"),
                                     "embeddings/progression_frames": len(animation_frames),
-                                },
-                                step=int(animation_frames[-1].get("epoch", max(0, num_epochs - 1))),
+                                }
                             )
                 except Exception as e:
                     print(f"[embedding_animation] failed: {e}")

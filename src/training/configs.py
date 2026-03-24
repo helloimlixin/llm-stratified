@@ -61,6 +61,29 @@ class VolumeProbeConfig:
     pixel_patch_stride: Optional[int] = None
 
 
+@dataclass
+class SamFiberConfig:
+    enabled: bool = False
+    model_name: str = "facebook/sam-vit-base"
+    epochs: int = 1
+    resample_each_epoch: bool = True
+    max_tokens: int = 1536
+    analysis_patch_size: int = 16
+    vol_min: int = 8
+    vol_max: int = 64
+    ws: int = 8
+    alpha: float = 5e-3
+    nstrat: int = 3
+    neighborhood_size: Optional[int] = None
+    progress: bool = True
+    mask_threshold: float = 0.25
+    max_boxes_per_image: int = 16
+    mask_preview_images: int = 6
+    multimask_output: bool = False
+    embedding_animation: bool = True
+    embedding_animation_fps: int = 1
+
+
 def _get_field_value(source: Any, name: str, default: Any) -> Any:
     if hasattr(source, "get"):
         try:
@@ -110,3 +133,27 @@ def build_volume_probe_config(
         else:
             data[field.name] = _get_field_value(source, field.name, field.default)
     return VolumeProbeConfig(**data)
+
+
+def normalize_sam_fiber_config(sam_cfg: SamFiberConfig) -> SamFiberConfig:
+    analysis_patch_size = max(1, int(sam_cfg.analysis_patch_size))
+    sam_cfg.analysis_patch_size = analysis_patch_size
+    if sam_cfg.neighborhood_size is None:
+        sam_cfg.neighborhood_size = max(analysis_patch_size * 2, analysis_patch_size + 1)
+    elif sam_cfg.neighborhood_size <= analysis_patch_size:
+        sam_cfg.neighborhood_size = analysis_patch_size + 1
+    return sam_cfg
+
+
+def build_sam_fiber_config(
+    source: Any,
+    *,
+    enabled: Optional[bool] = None,
+) -> SamFiberConfig:
+    data: dict[str, Any] = {}
+    for field in fields(SamFiberConfig):
+        if field.name == "enabled":
+            data[field.name] = enabled if enabled is not None else _get_field_value(source, field.name, field.default)
+        else:
+            data[field.name] = _get_field_value(source, field.name, field.default)
+    return normalize_sam_fiber_config(SamFiberConfig(**data))
