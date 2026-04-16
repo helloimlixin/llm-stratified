@@ -50,6 +50,9 @@
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
 
+% Avoid page-stretching warnings on float-heavy pages.
+\raggedbottom
+
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}
 \newtheorem{assumption}{Assumption}
@@ -301,10 +304,11 @@ Contrast DINOv2 last-layer tokens, DINO patch embeddings, and matched raw-pixel 
 
 \begin{table}[H]
 \centering
+\small
 \caption{Pretrained representation comparison from the April 2026 sweep.}
-\begin{tabular}{lcccc}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.23\linewidth}cc>{\raggedright\arraybackslash}p{0.28\linewidth}@{}}
 \toprule
-Dataset & Representation & Mean dim & Irregular ratio & Notes \\
+Dataset & Representation & Mean dim & Irreg. ratio & Notes \\
 \midrule
 CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & higher irregularity than raw and patch embeddings \\
 CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\

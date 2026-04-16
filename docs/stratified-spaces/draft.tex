@@ -42,6 +42,9 @@
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\runroot}{../../../../runs/llm-stratified/20260413_154940_volume_probe_visual_sweep}
 
+% Avoid page-stretching warnings on float-heavy pages.
+\raggedbottom
+
 \title{Stratified Geometry in Vision Representations}
 \author{
   Author One \\
@@ -161,10 +164,11 @@ The pretrained sweep shows a clear split between DINOv2 patch embeddings and DIN
 
 \begin{table}[H]
 \centering
+\small
 \caption{DINOv2 comparison on the completed sweep.}
-\begin{tabular}{lcccc}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.23\linewidth}cc>{\raggedright\arraybackslash}p{0.28\linewidth}@{}}
 \toprule
-Dataset & Representation & Mean dim & Irregular ratio & Interpretation \\
+Dataset & Representation & Mean dim & Irreg. ratio & Interpretation \\
 \midrule
 CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & more irregular than raw and patch embeddings \\
 CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\
