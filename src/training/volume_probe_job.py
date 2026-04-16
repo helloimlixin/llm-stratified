@@ -97,6 +97,8 @@ def run_volume_probe_job(
         "dinov2_model": volume_cfg.dinov2_model,
         "dinov2_layers": volume_cfg.dinov2_layers,
         "pixel_patch_stride": volume_cfg.pixel_patch_stride,
+        "viz_projection_points": volume_cfg.viz_projection_points,
+        "viz_curve_anchors": volume_cfg.viz_curve_anchors,
     }
 
     return run_volume_probe(
@@ -120,5 +122,7 @@ def run_volume_probe_job(
         viz_patches=volume_cfg.viz_patches,
         viz_nn_anchors=volume_cfg.viz_nn_anchors,
         viz_nn_k=volume_cfg.viz_nn_k,
+        viz_projection_points=volume_cfg.viz_projection_points,
+        viz_curve_anchors=volume_cfg.viz_curve_anchors,
         config=config,
     )

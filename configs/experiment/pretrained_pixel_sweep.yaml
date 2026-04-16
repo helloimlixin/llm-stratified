@@ -1,0 +1,36 @@
+# @package _global_
+#
+# Pretrained-vs-pixel sweep: compare frozen DINOv2 representations against
+# raw pixels at multiple granularities. Uses DINOv2-base (patch_size=14).
+#
+defaults:
+  - override /model: tinyvit
+  - override /volume_probe: basic
+  - override /fiber: disabled
+  - override /training: debug
+
+volume_probe:
+  enabled: true
+  max_tokens: 4096
+  vol_min: 8
+  vol_max: 128
+  ws: 8
+  alpha: 0.005
+  nstrat: 3
+  save_full: false
+  progress: true
+  viz_images: 16
+  viz_patches: 128
+  viz_nn_anchors: 5
+  viz_nn_k: 12
+  viz_projection_points: 1536
+  viz_curve_anchors: 8
+  feature_backbone: dinov2
+  dinov2_model: facebook/dinov2-base
+  dinov2_layers: null
+  pixel_patch_stride: null
+
+data:
+  num_workers: 4
+  subset_test: null
+  batch_size_test: 16

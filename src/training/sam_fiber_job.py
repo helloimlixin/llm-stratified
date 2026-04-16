@@ -21,11 +21,8 @@ except ImportError:  # pragma: no cover
     tqdm = None
 
 from data import make_loaders, resolve_class_names
-from fiber_bundle import (
-    build_embedding_animation_frames,
-    generate_embedding_animation,
-    run_fiber_analysis_epoch,
-)
+from fiber.animation import build_embedding_animation_frames, generate_embedding_animation
+from fiber.orchestration import run_fiber_analysis_epoch
 from models import SamBackboneWrapper
 from training.configs import SamFiberConfig
 from training.wandb_utils import finish_wandb_run, init_wandb_run

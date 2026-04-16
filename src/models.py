@@ -62,7 +62,7 @@ class MlpBlock(nn.Module):
         self.drop = nn.Dropout(dropout_rate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.drop(self.fc2(self.drop(self.drop(self.act(self.fc1(x))))))
+        return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
 class TransformerBlock(nn.Module):

@@ -314,7 +314,8 @@ def run_training(
 
             # Fiber analysis
             if fiber_cfg.enabled and (epoch == 0 or (epoch + 1) % fiber_cfg.embed_interval == 0 or epoch == num_epochs - 1):
-                from fiber_bundle import collect_patch_tokens, run_fiber_analysis_epoch
+                from fiber.collection import collect_patch_tokens
+                from fiber.orchestration import run_fiber_analysis_epoch
 
                 if use_ddp and not use_accelerate and dist.is_initialized():
                     dist.barrier()
@@ -359,11 +360,11 @@ def run_training(
                     if not fiber_cfg.embed_full_val:
                         embeddings = embeddings[: fiber_cfg.max_tokens]
                         labels = labels[: fiber_cfg.max_tokens]
-                        images = images[: fiber_cfg.max_tokens]
                         bboxes = bboxes[: fiber_cfg.max_tokens]
                         patch_indices = patch_indices[: fiber_cfg.max_tokens]
                         img_ids = img_ids[: fiber_cfg.max_tokens]
                         pred_labels = pred_labels[: fiber_cfg.max_tokens]
+                        # images is a unique-image buffer; don't truncate by max_tokens
 
                     embeddings = embeddings.cpu()
                     labels = labels.cpu()
@@ -400,15 +401,6 @@ def run_training(
                         polysemy_k=fiber_cfg.polysemy_k,
                         polysemy_anchors=fiber_cfg.polysemy_anchors,
                         polysemy_grid_cols=fiber_cfg.polysemy_grid_cols,
-                        polysemy_invert=fiber_cfg.polysemy_invert,
-                        polysemy_invert_steps=fiber_cfg.polysemy_invert_steps,
-                        polysemy_invert_restarts=fiber_cfg.polysemy_invert_restarts,
-                        polysemy_invert_lr=fiber_cfg.polysemy_invert_lr,
-                        polysemy_invert_tv=fiber_cfg.polysemy_invert_tv,
-                        polysemy_invert_l2=fiber_cfg.polysemy_invert_l2,
-                        polysemy_invert_patch_only=fiber_cfg.polysemy_invert_patch_only,
-                        polysemy_invert_blur_every=fiber_cfg.polysemy_invert_blur_every,
-                        polysemy_invert_blur_sigma=fiber_cfg.polysemy_invert_blur_sigma,
                         vit_token_polysemy=fiber_cfg.vit_token_polysemy,
                         vit_token_polysemy_k=fiber_cfg.vit_token_polysemy_k,
                         vit_token_polysemy_topk=fiber_cfg.vit_token_polysemy_topk,
@@ -462,7 +454,8 @@ def run_training(
 
         # Save histories
         if fiber_cfg.enabled and is_main_process and run_dir:
-            from fiber_bundle import build_embedding_animation_frames, generate_embedding_animation, plot_progress
+            from fiber.animation import build_embedding_animation_frames, generate_embedding_animation
+            from fiber.visualization import plot_progress
 
             with open(run_dir / "train_history.json", "w") as fp:
                 json.dump(train_history, fp, indent=2)

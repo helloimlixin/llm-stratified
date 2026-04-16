@@ -1,0 +1,38 @@
+# @package _global_
+#
+# Pixel-space stratification sweep: test whether raw pixel patches at
+# different granularities (patch size × stride) exhibit stratified manifold
+# structure.  Runs volume probe only (no training).
+#
+defaults:
+  - override /model: tinyvit
+  - override /volume_probe: basic
+  - override /fiber: disabled
+  - override /training: debug
+
+# Probe settings — overridden per sweep cell by the launcher
+model:
+  patch_size: 8
+
+volume_probe:
+  enabled: true
+  max_tokens: 4096
+  vol_min: 8
+  vol_max: 128
+  ws: 8
+  alpha: 0.005
+  nstrat: 3
+  save_full: true
+  progress: true
+  viz_images: 16
+  viz_patches: 128
+  viz_nn_anchors: 5
+  viz_nn_k: 12
+  viz_projection_points: 1536
+  viz_curve_anchors: 8
+  pixel_patch_stride: null
+
+data:
+  num_workers: 4
+  subset_test: null
+  batch_size_test: 64

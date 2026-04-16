@@ -55,6 +55,8 @@ class VolumeProbeConfig:
     viz_patches: int = 64
     viz_nn_anchors: int = 3
     viz_nn_k: int = 8
+    viz_projection_points: int = 1024
+    viz_curve_anchors: int = 6
     feature_backbone: str = "model"
     dinov2_model: str = "facebook/dinov2-base"
     dinov2_layers: Optional[list[int]] = None

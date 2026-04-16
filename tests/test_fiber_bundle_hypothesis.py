@@ -9,11 +9,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fiber_bundle import (
-    HAS_MATPLOTLIB,
-    compute_stratified_manifold_hypothesis_metrics,
-    make_embedding_figure_3d,
-)
+from fiber.visualization import HAS_MATPLOTLIB, make_embedding_figure_3d
+from fiber.hypothesis import compute_stratified_manifold_hypothesis_metrics
 
 
 class TestFiberBundleHypothesis(unittest.TestCase):
@@ -75,7 +72,7 @@ class TestFiberBundleHypothesis(unittest.TestCase):
         coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, 0.2], [2.0, 1.0, 0.4]], dtype=np.float64)
         dims = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-        with patch("fiber_bundle._matplotlib_supports_3d", return_value=False):
+        with patch("fiber.visualization.matplotlib_supports_3d", return_value=False):
             fig = make_embedding_figure_3d(coords, dims)
             try:
                 self.assertNotEqual(fig.axes[0].name, "3d")

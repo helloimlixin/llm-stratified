@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -24,8 +25,16 @@ except Exception:  # pragma: no cover
     make_grid = None
     to_pil_image = None
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover
+    matplotlib = None
+    plt = None
+
 from data import make_loaders
-from stratified_geometry import (
+from fiber.geometry import (
     normalize_volume_range,
     run_fiber_bundle_test_from_sorted_dists,
     sorted_distance_matrix,
@@ -85,6 +94,10 @@ def _representation_prefix_tokens(model: torch.nn.Module, rep_name: str) -> int:
 
 def _pixel_rep_name(patch_size: int, patch_stride: int) -> str:
     return "patch_pixels" if int(patch_stride) == int(patch_size) else f"patch_pixels_stride_{int(patch_stride)}"
+
+
+def _stable_seed_offset(name: str) -> int:
+    return sum((idx + 1) * ord(ch) for idx, ch in enumerate(str(name))) % 100000
 
 
 def _forward_patch_embed(model: torch.nn.Module, imgs: torch.Tensor) -> torch.Tensor:
@@ -175,7 +188,7 @@ def _run_volume_estimation(
     dists_sorted = sorted_distance_matrix(coords)
     npts = int(dists_sorted.shape[0])
     if npts < 2:
-        return {"num_tokens": npts, "tokens_with_strata": 0}, np.array([], dtype=np.float64), [], None
+        return {"num_tokens": npts, "tokens_with_strata": 0}, np.array([], dtype=np.float64), [], None, None
 
     vol_min_adj, vol_max_adj = normalize_volume_range(npts, vol_min, vol_max)
     results = run_fiber_bundle_test_from_sorted_dists(
@@ -203,7 +216,293 @@ def _run_volume_estimation(
             "quantiles": qs.tolist(),
             "radii": {f"q{int(q * 100)}": qvals[i].astype(float).tolist() for i, q in enumerate(qs.tolist())},
         }
-    return summary, dims, results, knn_curve
+    return summary, dims, results, knn_curve, dists_sorted
+
+
+def _result_min_pvalues(results: list[dict]) -> np.ndarray:
+    values = np.full(len(results), np.nan, dtype=np.float64)
+    for idx, res in enumerate(results):
+        if not res or not res.get("pvalues"):
+            continue
+        finite = np.asarray(res["pvalues"], dtype=np.float64)
+        finite = finite[np.isfinite(finite)]
+        if finite.size:
+            values[idx] = float(np.min(finite))
+    return values
+
+
+def _result_irregularity(min_pvalues: np.ndarray) -> np.ndarray:
+    out = np.full(min_pvalues.shape, np.nan, dtype=np.float64)
+    finite = np.isfinite(min_pvalues)
+    out[finite] = -np.log10(np.clip(min_pvalues[finite], 1e-12, None))
+    return out
+
+
+def _select_visual_anchor_indices(scores: np.ndarray, *, limit: int) -> np.ndarray:
+    if limit <= 0:
+        return np.empty(0, dtype=np.int64)
+    finite = np.flatnonzero(np.isfinite(scores))
+    if finite.size == 0:
+        return np.empty(0, dtype=np.int64)
+
+    picks: list[int] = []
+    high = finite[np.argsort(-scores[finite])]
+    low = finite[np.argsort(scores[finite])]
+    median = float(np.median(scores[finite]))
+    middle = finite[np.argsort(np.abs(scores[finite] - median))]
+
+    for candidate_set in (high, middle, low):
+        for idx in candidate_set.tolist():
+            if idx not in picks:
+                picks.append(int(idx))
+            if len(picks) >= limit:
+                return np.asarray(picks, dtype=np.int64)
+    return np.asarray(picks, dtype=np.int64)
+
+
+def _project_embeddings_2d(
+    embeddings: torch.Tensor,
+    *,
+    max_points: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n = int(embeddings.shape[0])
+    if n <= 0:
+        return np.empty(0, dtype=np.int64), np.zeros((0, 2), dtype=np.float32)
+
+    if 0 < max_points < n:
+        rng = np.random.default_rng(int(seed))
+        sample_idx = np.sort(rng.choice(n, size=max_points, replace=False).astype(np.int64))
+    else:
+        sample_idx = np.arange(n, dtype=np.int64)
+
+    sample = embeddings[sample_idx].detach().float().cpu()
+    if sample.numel() == 0:
+        return sample_idx, np.zeros((0, 2), dtype=np.float32)
+
+    centered = sample - sample.mean(dim=0, keepdim=True)
+    rank = min(2, int(centered.shape[0]), int(centered.shape[1]))
+    if rank > 0:
+        _u, _s, v = torch.pca_lowrank(centered, q=rank)
+        coords = centered @ v[:, :rank]
+    else:
+        coords = torch.zeros((sample.shape[0], 0), dtype=sample.dtype)
+
+    if coords.shape[1] < 2:
+        coords = torch.cat(
+            [coords, torch.zeros((coords.shape[0], 2 - coords.shape[1]), dtype=coords.dtype)],
+            dim=1,
+        )
+    return sample_idx, coords[:, :2].numpy()
+
+
+def _scatter_metric(ax, coords: np.ndarray, values: np.ndarray, *, title: str, cmap: str) -> None:
+    finite = np.isfinite(values)
+    if np.any(~finite):
+        ax.scatter(
+            coords[~finite, 0],
+            coords[~finite, 1],
+            s=8,
+            c="#d0d0d0",
+            alpha=0.5,
+            linewidths=0,
+        )
+    if np.any(finite):
+        scatter = ax.scatter(
+            coords[finite, 0],
+            coords[finite, 1],
+            s=10,
+            c=values[finite],
+            cmap=cmap,
+            alpha=0.85,
+            linewidths=0,
+        )
+        plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+    ax.set_title(title)
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+
+
+def _save_patch_nn_grid(
+    *,
+    rep: torch.Tensor,
+    display_source: torch.Tensor,
+    rep_name: str,
+    out_path: Path,
+    patch_size: int,
+    seed: int,
+    anchors: int,
+    nn_k: int,
+    anchor_indices: np.ndarray | None = None,
+) -> bool:
+    if make_grid is None or to_pil_image is None:
+        return False
+    n = int(rep.shape[0])
+    if n <= 1 or anchors <= 0 or nn_k <= 0:
+        return False
+    ps = int(patch_size)
+    c = int(display_source.shape[1] // max(1, ps * ps))
+    if c <= 0 or display_source.shape[1] != c * ps * ps:
+        return False
+
+    if anchor_indices is None:
+        rng = np.random.default_rng(int(seed) + _stable_seed_offset(rep_name))
+        take = min(int(anchors), n)
+        anchor_idx = rng.choice(n, size=take, replace=False) if take < n else np.arange(n)
+    else:
+        anchor_idx = np.asarray(anchor_indices, dtype=np.int64)
+        anchor_idx = anchor_idx[np.logical_and(anchor_idx >= 0, anchor_idx < n)]
+        if anchor_idx.size == 0:
+            return False
+        anchor_idx = anchor_idx[: min(int(anchors), anchor_idx.size)]
+
+    nn_k_eff = min(int(nn_k), n - 1)
+    rep_f = rep.to(dtype=torch.float32)
+    patches = display_source.to(dtype=torch.float32)
+    rows = []
+    for anchor in anchor_idx.tolist():
+        d = ((rep_f - rep_f[int(anchor)]) ** 2).sum(dim=1)
+        nn = torch.topk(d, k=nn_k_eff + 1, largest=False).indices
+        rows.append(patches[nn].reshape(-1, c, ps, ps).clamp(0, 1))
+    if not rows:
+        return False
+
+    grid = make_grid(torch.cat(rows, dim=0), nrow=nn_k_eff + 1, padding=2)
+    to_pil_image(grid).save(out_path)
+    return True
+
+
+def _save_representation_dashboard(
+    *,
+    embeddings: torch.Tensor,
+    dims: np.ndarray,
+    min_pvalues: np.ndarray,
+    irregularity: np.ndarray,
+    summary: dict,
+    alpha: float,
+    out_path: Path,
+    seed: int,
+    max_points: int,
+) -> bool:
+    if plt is None:
+        return False
+
+    finite_dims = dims[np.isfinite(dims)]
+    finite_irregularity = irregularity[np.isfinite(irregularity)]
+    if embeddings.shape[0] <= 0 or (finite_dims.size == 0 and finite_irregularity.size == 0):
+        return False
+
+    sample_idx, coords = _project_embeddings_2d(
+        embeddings,
+        max_points=max_points,
+        seed=int(seed),
+    )
+    if coords.shape[0] == 0:
+        return False
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    ax_dim_hist, ax_irr_hist, ax_irr_scatter, ax_dim_scatter = axes.flatten()
+
+    if finite_dims.size:
+        ax_dim_hist.hist(finite_dims, bins=min(30, max(8, int(np.sqrt(finite_dims.size)))), color="#2f5d8a", alpha=0.9)
+    ax_dim_hist.set_title("Local Dimension Distribution")
+    ax_dim_hist.set_xlabel("estimated dimension")
+    ax_dim_hist.set_ylabel("count")
+
+    if finite_irregularity.size:
+        ax_irr_hist.hist(
+            finite_irregularity,
+            bins=min(30, max(8, int(np.sqrt(finite_irregularity.size)))),
+            color="#a63d40",
+            alpha=0.9,
+        )
+    rejected = int(np.sum(np.isfinite(min_pvalues) & (min_pvalues < float(alpha))))
+    total = int(np.sum(np.isfinite(min_pvalues)))
+    ax_irr_hist.set_title(f"Irregularity Distribution ({rejected}/{total} rejected)")
+    ax_irr_hist.set_xlabel("-log10(min p-value)")
+    ax_irr_hist.set_ylabel("count")
+
+    _scatter_metric(
+        ax_irr_scatter,
+        coords,
+        irregularity[sample_idx],
+        title="PCA Projection Colored by Irregularity",
+        cmap="magma",
+    )
+    _scatter_metric(
+        ax_dim_scatter,
+        coords,
+        dims[sample_idx],
+        title="PCA Projection Colored by Local Dimension",
+        cmap="viridis",
+    )
+
+    fig.suptitle(
+        "mean_dim="
+        f"{summary.get('mean_dim', float('nan')):.2f}, "
+        "irregular_ratio="
+        f"{summary.get('irregular_ratio', float('nan')):.3f}",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
+def _save_scaling_curves_figure(
+    *,
+    dists_sorted: np.ndarray | None,
+    results: list[dict],
+    irregularity: np.ndarray,
+    out_path: Path,
+    seed: int,
+    vol_min: int,
+    vol_max: int,
+    anchors: int,
+) -> bool:
+    if plt is None or dists_sorted is None or anchors <= 0:
+        return False
+
+    anchor_idx = _select_visual_anchor_indices(irregularity, limit=anchors)
+    if anchor_idx.size == 0:
+        return False
+
+    k_values = np.arange(int(vol_min), int(vol_max), dtype=np.int64)
+    if k_values.size == 0:
+        return False
+
+    cols = min(2, int(anchor_idx.size))
+    rows = int(math.ceil(anchor_idx.size / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(12, 4 * rows), squeeze=False)
+
+    for ax, idx in zip(axes.flatten(), anchor_idx.tolist()):
+        radii = np.clip(np.asarray(dists_sorted[k_values, int(idx)], dtype=np.float64), 1e-12, None)
+        ax.plot(np.log10(radii), np.log10(k_values.astype(np.float64)), color="#2f5d8a", linewidth=2)
+        res = results[int(idx)] if int(idx) < len(results) else {}
+        for strat_radius in np.asarray((res or {}).get("strat_radii") or [], dtype=np.float64):
+            if np.isfinite(strat_radius) and strat_radius > 0:
+                ax.axvline(np.log10(strat_radius), color="#a63d40", linestyle="--", linewidth=1)
+        dims = [float(val) for val in (res or {}).get("dimensions") or [] if np.isfinite(float(val))]
+        min_p = float(np.nanmin(np.asarray((res or {}).get("pvalues") or [np.nan], dtype=np.float64)))
+        title = f"anchor {idx} | irr {irregularity[int(idx)]:.2f}"
+        if dims:
+            title += " | dims " + ",".join(f"{dim:.1f}" for dim in dims[:3])
+        if np.isfinite(min_p):
+            title += f" | p={min_p:.2e}"
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("log10(radius)")
+        ax.set_ylabel("log10(k)")
+        ax.grid(alpha=0.25)
+
+    for ax in axes.flatten()[anchor_idx.size :]:
+        ax.axis("off")
+
+    fig.suptitle("Local Volume Scaling Curves", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return True
 
 
 def run_volume_probe(
@@ -228,6 +527,8 @@ def run_volume_probe(
     viz_patches: int = 64,
     viz_nn_anchors: int = 3,
     viz_nn_k: int = 8,
+    viz_projection_points: int = 1024,
+    viz_curve_anchors: int = 6,
     config: dict | None = None,
 ) -> dict:
     representations, example_images = collect_representations(
@@ -276,7 +577,7 @@ def run_volume_probe(
                 c = int(rep.shape[1] // max(1, ps * ps))
                 if c <= 0 or rep.shape[1] != c * ps * ps:
                     continue
-                rng = np.random.default_rng(int(seed) + (hash(rep_name) % 10000))
+                rng = np.random.default_rng(int(seed) + _stable_seed_offset(rep_name))
                 take = min(int(viz_patches), n)
                 idx = rng.choice(n, size=take, replace=False) if take < n else np.arange(n)
                 patch_imgs = rep[idx].to(dtype=torch.float32).reshape(take, c, ps, ps).clamp(0, 1)
@@ -287,47 +588,26 @@ def run_volume_probe(
         except Exception as e:
             print(f"[viz] failed to save example_patches: {e}")
 
-        # Nearest-neighbor patch retrieval visualizations (using patch crops for all representations).
-        def _save_nn_grid(rep: torch.Tensor, rep_name: str) -> None:
-            n = int(rep.shape[0])
-            if n <= 1 or viz_nn_anchors <= 0 or viz_nn_k <= 0:
-                return
-            ps = int(patch_size)
-            display_source = rep if rep_name.startswith("patch_pixels_stride_") else patch_pixels
-            c = int(display_source.shape[1] // max(1, ps * ps))
-            if c <= 0 or display_source.shape[1] != c * ps * ps:
-                return
-            anchors = min(int(viz_nn_anchors), n)
-            nn_k_eff = min(int(viz_nn_k), n - 1)
-            rng = np.random.default_rng(int(seed) + (hash(rep_name) % 10000))
-            anchor_idx = rng.choice(n, size=anchors, replace=False) if anchors < n else np.arange(n)
-            rep_f = rep.to(dtype=torch.float32)
-            patches = display_source.to(dtype=torch.float32)
-            rows = []
-            for a in anchor_idx.tolist():
-                x0 = rep_f[int(a)]
-                d = ((rep_f - x0) ** 2).sum(dim=1)
-                nn = torch.topk(d, k=nn_k_eff + 1, largest=False).indices
-                rows.append(patches[nn].reshape(-1, c, ps, ps).clamp(0, 1))
-            if not rows:
-                return
-            grid_imgs = torch.cat(rows, dim=0)
-            out_path = out_dir / f"nn_{rep_name}.png"
-            grid = make_grid(grid_imgs, nrow=nn_k_eff + 1, padding=2)
-            to_pil_image(grid).save(out_path)
-            viz_files[f"nn_{rep_name}"] = out_path.name
-
         try:
             for rep_name, rep in representations.items():
-                _save_nn_grid(rep, rep_name)
+                display_source = rep if rep_name.startswith("patch_pixels_stride_") else patch_pixels
+                out_path = out_dir / f"nn_{rep_name}.png"
+                if _save_patch_nn_grid(
+                    rep=rep,
+                    display_source=display_source,
+                    rep_name=rep_name,
+                    out_path=out_path,
+                    patch_size=patch_size,
+                    seed=seed,
+                    anchors=viz_nn_anchors,
+                    nn_k=viz_nn_k,
+                ):
+                    viz_files[f"nn_{rep_name}"] = out_path.name
         except Exception as e:
             print(f"[viz] failed to save nn grids: {e}")
 
-    if viz_files:
-        results_payload["viz"] = viz_files
-
     for name, emb in representations.items():
-        summary, dims, results, knn_curve = _run_volume_estimation(
+        summary, dims, results, knn_curve, dists_sorted = _run_volume_estimation(
             emb,
             vol_min=vol_min,
             vol_max=vol_max,
@@ -342,12 +622,75 @@ def run_volume_probe(
             results_path = out_dir / f"{name}_fiber_results.json"
             with open(results_path, "w") as fp:
                 json.dump(to_serializable(results), fp, indent=2)
+
+        min_pvalues = _result_min_pvalues(results)
+        irregularity = _result_irregularity(min_pvalues)
+        rep_viz: dict[str, str] = {}
+        try:
+            detail_path = out_dir / f"detail_{name}.png"
+            if _save_representation_dashboard(
+                embeddings=emb,
+                dims=dims,
+                min_pvalues=min_pvalues,
+                irregularity=irregularity,
+                summary=summary,
+                alpha=alpha,
+                out_path=detail_path,
+                seed=int(seed) + _stable_seed_offset(name),
+                max_points=viz_projection_points,
+            ):
+                rep_viz["detail"] = detail_path.name
+                viz_files[f"detail_{name}"] = detail_path.name
+
+            k_min = int(knn_curve["k_min"]) if isinstance(knn_curve, dict) and knn_curve.get("k_min") is not None else int(vol_min)
+            k_max_exclusive = (
+                int(knn_curve["k_max"]) + 1
+                if isinstance(knn_curve, dict) and knn_curve.get("k_max") is not None
+                else int(vol_max)
+            )
+            scaling_path = out_dir / f"scaling_{name}.png"
+            if _save_scaling_curves_figure(
+                dists_sorted=dists_sorted,
+                results=results,
+                irregularity=irregularity,
+                out_path=scaling_path,
+                seed=int(seed) + _stable_seed_offset(name),
+                vol_min=k_min,
+                vol_max=k_max_exclusive,
+                anchors=viz_curve_anchors,
+            ):
+                rep_viz["scaling"] = scaling_path.name
+                viz_files[f"scaling_{name}"] = scaling_path.name
+
+            display_source = emb if name.startswith("patch_pixels_stride_") else patch_pixels
+            irregular_idx = _select_visual_anchor_indices(irregularity, limit=viz_nn_anchors)
+            nn_irregular_path = out_dir / f"nn_irregular_{name}.png"
+            if _save_patch_nn_grid(
+                rep=emb,
+                display_source=display_source,
+                rep_name=f"{name}_irregular",
+                out_path=nn_irregular_path,
+                patch_size=patch_size,
+                seed=int(seed) + _stable_seed_offset(name),
+                anchors=viz_nn_anchors,
+                nn_k=viz_nn_k,
+                anchor_indices=irregular_idx,
+            ):
+                rep_viz["nn_irregular"] = nn_irregular_path.name
+                viz_files[f"nn_irregular_{name}"] = nn_irregular_path.name
+        except Exception as e:
+            print(f"[viz] failed to save detailed visuals for {name}: {e}")
+
         results_payload["representations"][name] = {
             "summary": summary,
             "knn_curve": knn_curve,
             "dims_path": dims_path.name,
             "results_path": results_path.name if results_path else None,
+            "viz": rep_viz,
         }
+
+    if viz_files:
+        results_payload["viz"] = viz_files
 
     with open(out_dir / "volume_summary.json", "w") as fp:
         json.dump(to_serializable(results_payload), fp, indent=2)
@@ -413,6 +756,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--save-full", action="store_true")
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--viz-images", type=int, default=16)
+    parser.add_argument("--viz-patches", type=int, default=64)
+    parser.add_argument("--viz-nn-anchors", type=int, default=3)
+    parser.add_argument("--viz-nn-k", type=int, default=8)
+    parser.add_argument("--viz-projection-points", type=int, default=1024)
+    parser.add_argument("--viz-curve-anchors", type=int, default=6)
     parser.add_argument("--feature-backbone", choices=["model", "dinov2"], default="model")
     parser.add_argument("--dinov2-model", default="facebook/dinov2-base")
     parser.add_argument("--dinov2-layers", type=int, nargs="*", default=None)
@@ -465,6 +814,8 @@ def main() -> None:
         "dinov2_model": args.dinov2_model,
         "dinov2_layers": list(args.dinov2_layers) if args.dinov2_layers is not None else None,
         "pixel_patch_stride": args.pixel_patch_stride,
+        "viz_projection_points": args.viz_projection_points,
+        "viz_curve_anchors": args.viz_curve_anchors,
     }
     out_dir = Path(args.outdir)
     run_volume_probe(
@@ -484,6 +835,12 @@ def main() -> None:
         save_full=args.save_full,
         progress=args.progress,
         seed=args.seed,
+        viz_images=args.viz_images,
+        viz_patches=args.viz_patches,
+        viz_nn_anchors=args.viz_nn_anchors,
+        viz_nn_k=args.viz_nn_k,
+        viz_projection_points=args.viz_projection_points,
+        viz_curve_anchors=args.viz_curve_anchors,
         config=config,
     )
     print(f"Saved volume estimates -> {out_dir}")

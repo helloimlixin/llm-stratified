@@ -12,4 +12,5 @@ viz_images: 16
 viz_patches: 64
 viz_nn_anchors: 3
 viz_nn_k: 8
-
+viz_projection_points: 1024
+viz_curve_anchors: 6

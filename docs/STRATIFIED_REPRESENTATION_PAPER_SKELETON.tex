@@ -1,0 +1,484 @@
+\documentclass{article}
+
+% If you need to pass options to natbib, use, e.g.:
+% \PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2026.
+%
+% Submission version:
+% \usepackage{neurips_2026}
+%
+% Final camera-ready version:
+% \usepackage[final]{neurips_2026}
+%
+% Preprint version for arXiv or project sharing:
+\usepackage[preprint]{neurips_2026}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{url}
+\usepackage{microtype}
+\usepackage{nicefrac}
+\usepackage{amsfonts}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\newcommand{\TODO}[1]{\textcolor{red!70!black}{\textbf{TODO:} #1}}
+\newcommand{\NOTE}[1]{\textcolor{blue!50!black}{\textbf{Note:} #1}}
+\newcommand{\dataset}[1]{\textsc{#1}}
+\newcommand{\method}{\textsc{Volume Probe}}
+\newcommand{\fiber}{\textsc{Fiber Bundle Test}}
+\newcommand{\dimhat}{\widehat{d}}
+\newcommand{\irr}{\mathrm{irr}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{example}{Example}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\title{Stratified Geometry in Vision Representations}
+\author{
+  Author One \\
+  Affiliation \\
+  City, State / Country \\
+  \texttt{author1@example.com}
+  \And
+  Author Two \\
+  Affiliation \\
+  City, State / Country \\
+  \texttt{author2@example.com}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper investigates whether raw pixel patches, learned token spaces, and pretrained visual representations exhibit \emph{stratified geometric structure}. The core claim is that local volume scaling and change-point tests over nearest-neighbor radii reveal non-uniform dimensional regimes that are hidden by global summaries. We introduce \method, a no-training diagnostic for estimating local dimension and irregularity across representation spaces, and pair it with \fiber, a hypothesis test for detecting local stratification boundaries. Across an 18-run sweep over dataset, patch size, stride, backbone, and layer depth, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are smoother than DINOv2 last-layer tokens, whose irregularity is never lower than matched raw pixels in this sweep. The resulting evidence argues against a single smooth-manifold account even in simple vision patch spaces and motivates localized geometric diagnostics.
+\end{abstract}
+
+\section{Introduction}
+\paragraph{Problem setup.}
+Modern representation learning pipelines map images into token or feature spaces whose geometry is rarely interrogated beyond linear probing or retrieval metrics. This paper focuses on a stronger question: are these spaces locally manifold-like, or do they contain singular strata with changing intrinsic dimension?
+
+\paragraph{Motivation.}
+If representation spaces are stratified rather than smooth, then averaging geometry globally can conceal the phenomena that matter for robustness, semantic branching, and compositional reuse. A local estimator is therefore needed.
+
+\paragraph{Main thesis.}
+Our working thesis is that vision representations are better modeled as \emph{piecewise smooth spaces with singular transitions} than as single smooth manifolds.
+
+\paragraph{Contributions.}
+\begin{itemize}[leftmargin=1.5em]
+\item We formalize a practical local-dimension pipeline based on nearest-neighbor volume scaling and stratification testing.
+\item We provide a reproducible 18-run sweep over raw pixel patches, learned TinyViT tokens, and pretrained DINOv2 representations.
+\item We introduce qualitative diagnostics that pair local irregularity with patch retrievals, PCA projections, and scaling-curve visualizations, and we generate these artifacts for every completed run.
+\item We show empirically that overlapping patches do not dominate the effect, that TinyViT tokens are more irregular than matched raw pixels on average, and that DINOv2 patch embeddings can be smoother than the corresponding final token layers.
+\item We release code, configs, and experiment reports for direct reproduction.
+\end{itemize}
+
+\paragraph{Paper roadmap.}
+\Cref{sec:background} introduces the geometric setting. \Cref{sec:method} presents the estimators. \Cref{sec:experimental-setup} describes the sweep. \Cref{sec:results} presents the main findings. \Cref{sec:limitations} discusses caveats and next steps.
+
+\section{Background and Problem Formulation}
+\label{sec:background}
+
+\subsection{Representation Spaces as Stratified Objects}
+\begin{definition}[Stratified representation space]
+Let $\mathcal{X}$ denote the image domain and $f:\mathcal{X}\to\R^m$ a representation map. We say the image of $f$ is \emph{stratified} if it can be decomposed into subsets $\{\mathcal{S}_\ell\}_{\ell=1}^L$ such that each $\mathcal{S}_\ell$ is locally smooth with intrinsic dimension $d_\ell$, while transitions between strata can create singular neighborhoods where local dimension estimates change abruptly.
+\end{definition}
+
+\paragraph{Operational question.}
+Given samples $\{z_i\}_{i=1}^n \subset \R^m$, can we detect whether local neighborhoods around $z_i$ are consistent with one stable scaling regime, or whether they contain evidence of multiple regimes?
+
+\subsection{Local Volume Scaling}
+For each anchor point $z_i$, let $r_k(i)$ denote the distance to its $k$th nearest neighbor. Under ideal smooth-manifold assumptions, neighborhood volume scales approximately as
+\begin{equation}
+  V_k(i) \propto r_k(i)^{d_i},
+\end{equation}
+so a log--log regression of volume against radius estimates a local dimension $d_i$.
+
+\paragraph{Why this is not enough.}
+Single-slope fits can fail near singularities, class intersections, texture seams, or semantic branch points. We therefore test for change points in the local scaling curve rather than assuming one regime.
+
+\subsection{Hypotheses}
+\begin{assumption}[Raw-pixel singularity hypothesis]
+Raw image patch spaces already contain substantial local stratification because natural images combine textures, edges, smooth regions, and object boundaries in one ambient space.
+\end{assumption}
+
+\begin{assumption}[Representation smoothing hypothesis]
+Learned or pretrained token spaces may either smooth raw singularities by semantic abstraction, or amplify them by separating semantic modes.
+\end{assumption}
+
+\begin{assumption}[Layer-wise reorganization hypothesis]
+Different layers of a pretrained encoder need not monotonically smooth local geometry; early and late layers may reorganize singular structure in qualitatively different ways.
+\end{assumption}
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Local Dimension Estimation}
+Given sorted neighbor radii $r_{k_{\min}}(i), \dots, r_{k_{\max}}(i)$, we fit a weighted least-squares regression
+\begin{equation}
+  \log V_k = \beta_0 + \beta_1 \log r_k + \varepsilon_k,
+\end{equation}
+where $V_k = k$ and $\dimhat_i = \beta_1$.
+
+\paragraph{Implementation details to describe explicitly.}
+\begin{itemize}[leftmargin=1.5em]
+\item The range $(k_{\min}, k_{\max})$ used for all reported experiments.
+\item The weighting scheme in the regression.
+\item How degenerate or repeated radii are handled.
+\item Whether distances are computed in float32 or float64.
+\item Runtime complexity and any batching/truncation strategy.
+\end{itemize}
+
+\subsection{Stratification Detection}
+To detect multiple local regimes, we compute a finite-difference approximation of local scaling slopes across the $k$-axis, smooth them, and apply a sliding Welch-style change-point test.
+
+\begin{equation}
+  \irr_i = -\log_{10}(p_i + 10^{-12}),
+\end{equation}
+where $p_i$ is the minimum local change-point p-value around anchor $i$.
+
+\paragraph{Primary outputs.}
+For each representation space, report:
+\begin{itemize}[leftmargin=1.5em]
+\item mean and median local dimension,
+\item fraction of anchors with statistically significant change points,
+\item mean and maximum irregularity,
+\item representative scaling curves and patch neighborhoods.
+\end{itemize}
+
+\subsection{Representations Under Study}
+\paragraph{Raw pixels.}
+Extract non-overlapping and overlapping patch tensors from denormalized images.
+
+\paragraph{Untrained TinyViT.}
+Use token outputs and patch embeddings from an untrained patch-based encoder \citep{wu2022tinyvit}.
+
+\paragraph{Pretrained DINOv2.}
+Use frozen patch embeddings and token layers from a pretrained DINOv2 backbone \citep{oquab2023dinov2}. Include both last-layer and intermediate-layer analyses.
+
+\subsection{Visualization Suite}
+The paper should include at least four visualization families:
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Dimension histograms:} distributions of $\dimhat_i$ for each representation.
+\item \textbf{Irregularity histograms:} distributions of $\irr_i$ or significant/non-significant split plots.
+\item \textbf{Projection plots:} 2D PCA or t-SNE projections colored by local dimension or irregularity.
+\item \textbf{Scaling-curve panels:} per-anchor log--log radius/volume curves with estimated regime boundaries.
+\end{enumerate}
+
+\section{Experimental Setup}
+\label{sec:experimental-setup}
+
+\subsection{Datasets}
+\begin{itemize}[leftmargin=1.5em]
+\item \dataset{CIFAR10} \citep{krizhevsky2009learning}: low-resolution natural images.
+\item \dataset{STL10} \citep{coates2011analysis}: larger images with broader texture and object-scale variation.
+\item This sweep is intentionally narrow and only covers these two datasets; the main paper should state that scope explicitly rather than imply broader universality.
+\end{itemize}
+
+\subsection{Sweep Axes}
+\begin{table}[H]
+\centering
+\caption{Suggested sweep grid to describe in the main text.}
+\begin{tabular}{ll}
+\toprule
+Axis & Values / examples \\
+\midrule
+Dataset & CIFAR10, STL10 \\
+Patch size & 4, 8, 16, 14 for DINOv2-native grids \\
+Stride & full stride, half stride \\
+Backbone & raw pixels, TinyViT, DINOv2 \\
+Representation type & patch pixels, patch embeddings, tokens, intermediate layers \\
+Probe hyperparameters & $k_{\min}=8$, $k_{\max}=128$, window size $=8$, significance level $\alpha=0.005$ \\
+\bottomrule
+\end{tabular}
+\label{tab:sweep-grid}
+\end{table}
+
+\subsection{Evaluation Metrics}
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Mean local dimension}: average first-regime estimate.
+\item \textbf{Median local dimension}: robust summary against tails.
+\item \textbf{Irregular ratio}: fraction of anchors with significant change points.
+\item \textbf{Mean irregularity}: average $-\log_{10}(p)$ score.
+\item \textbf{Qualitative coherence}: nearest-neighbor patch retrievals for irregular anchors.
+\end{itemize}
+
+\subsection{Reproducibility}
+\paragraph{Current sweep configuration.}
+\begin{itemize}[leftmargin=1.5em]
+\item Completed runs: 18 total, comprising 10 raw-pixel/TinyViT sweep cells and 8 pretrained-vs-pixel sweep cells.
+\item Frozen snapshot used for submission: \url{/scratch/xl598/submission_snapshots/volume_probe_sweeps_20260413_154940/repo}.
+\item Runtime environment: Conda environment \texttt{tinyvit}; submission partition \texttt{gpu-redhat}; jobs \texttt{51035214} and \texttt{51035215} ran on node \texttt{gpuk018} for 23m23s and 18m27s, respectively.
+\item Probe settings: \texttt{max\_tokens=4096}, \texttt{vol\_min=8}, \texttt{vol\_max=128}, \texttt{ws=8}, \texttt{alpha=0.005}, and \texttt{nstrat=3}.
+\item Aggregated outputs: \url{/scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/volume_probe_sweep_report.md} and the paired JSON report in the same directory.
+\end{itemize}
+
+\section{Main Results}
+\label{sec:results}
+
+\subsection{Do Raw Pixel Patches Already Exhibit Stratified Geometry?}
+\paragraph{Claim.}
+Raw pixel patch spaces are strongly stratified across all tested datasets and patch granularities.
+
+\paragraph{Quantitative summary.}
+Across the full raw-pixel grid, the irregular ratio stays between 0.793 and 0.875. The most stratified completed raw-pixel configuration is \dataset{STL10} with patch size 8 and stride 8 (mean dimension 13.20, irregular ratio 0.875), while the smoothest is \dataset{CIFAR10} with patch size 16 and stride 8 (mean dimension 15.65, irregular ratio 0.793). These values are still far from a uniformly smooth picture: every raw-pixel condition tested yields a large fraction of anchors with significant local change points.
+
+\begin{table}[H]
+\centering
+\caption{Representative raw-pixel stratification results from the April 2026 visual sweep.}
+\begin{tabular}{lcccc}
+\toprule
+Dataset & Patch size & Stride & Mean dim & Irregular ratio \\
+\midrule
+CIFAR10 & 4 & 4 & 8.18 & 0.833 \\
+CIFAR10 & 8 & 8 & 11.36 & 0.825 \\
+STL10 & 8 & 4 & 14.97 & 0.873 \\
+STL10 & 16 & 16 & 16.00 & 0.861 \\
+\bottomrule
+\end{tabular}
+\label{tab:raw-pixel-results}
+\end{table}
+
+\subsection{Does Overlap Change Local Geometry?}
+\paragraph{Question.}
+Do overlapping patches smooth local singularities by averaging, or sharpen them by exposing more boundary transitions?
+
+\paragraph{Interpretation.}
+Compared with matched full-stride patch extraction, half-stride overlap changes irregularity inconsistently rather than acting as a dominant smoothing or sharpening mechanism. Overlap increases irregularity in only 1 of 4 matched dataset/patch comparisons, with the largest increase on \dataset{STL10} patch 16 (0.861 $\rightarrow$ 0.873). In \dataset{CIFAR10} patch 16, overlap slightly decreases irregularity (0.807 $\rightarrow$ 0.793), which further argues against a simple monotone overlap effect.
+
+\subsection{Do Learned Tokens Smooth Raw Pixel Singularities?}
+\paragraph{Primary comparison.}
+Compare each TinyViT token space to its matched raw-pixel probe.
+
+\begin{figure}[H]
+\centering
+\fbox{\rule{0pt}{2in}\rule{0.95\linewidth}{0pt}}
+\caption{Planned replacement figure for the paper: side-by-side comparison of raw-pixel, patch-embedding, and token-space irregularity distributions using the generated \texttt{detail\_*.png} artifacts. The current sweep shows that TinyViT tokens are more irregular than matched raw pixels on average by +0.050.}
+\label{fig:token-vs-pixel}
+\end{figure}
+
+\paragraph{Result.}
+Token representations are more irregular than the matched raw-pixel spaces on average. Across the pure pixel sweep, the mean token-minus-pixel irregularity delta is +0.050. The gap is especially visible in \dataset{CIFAR10} patch 4 (token 0.949 versus raw 0.833) and \dataset{STL10} patch 8 (token 0.944 versus raw 0.875), which suggests that the learned token geometry is separating or sharpening local modes rather than uniformly smoothing singularities inherited from pixels.
+
+\subsection{How Do Pretrained DINOv2 Features Behave?}
+\paragraph{Primary comparison.}
+Contrast DINOv2 last-layer tokens, DINO patch embeddings, and matched raw-pixel probes.
+
+\begin{table}[H]
+\centering
+\caption{Pretrained representation comparison from the April 2026 sweep.}
+\begin{tabular}{lcccc}
+\toprule
+Dataset & Representation & Mean dim & Irregular ratio & Notes \\
+\midrule
+CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & higher irregularity than raw and patch embeddings \\
+CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\
+STL10 & DINO last-layer tokens & 5.62 & 0.895 & higher irregularity than raw and patch embeddings \\
+STL10 & DINO patch embeddings & 25.91 & 0.814 & smoother than last-layer tokens \\
+\bottomrule
+\end{tabular}
+\label{tab:pretrained-results}
+\end{table}
+
+\paragraph{Result.}
+Last-layer DINOv2 tokens are not smoother than their matched raw-pixel probes in any of the six completed DINO runs. Averaged over those runs, matched raw-pixel irregularity is 0.852, while the corresponding token irregularity is 0.897. In contrast, DINO patch embeddings are consistently smoother than DINO last-layer tokens on both datasets, which suggests that part of the geometric sharpening happens after the patch-embedding stage rather than before it.
+
+\subsection{Layer-wise Geometry in Pretrained Models}
+\paragraph{Analysis target.}
+Use intermediate layers to test whether geometry becomes progressively smoother, or whether different layers specialize into different singular structures.
+
+\paragraph{Result.}
+Intermediate layers exhibit lower irregularity than the last layer in both completed multilayer DINO runs, with irregularity increasing monotonically from layer 03 to layer 06 to the last layer: 0.800 $\rightarrow$ 0.855 $\rightarrow$ 0.900 on \dataset{CIFAR10}, and 0.808 $\rightarrow$ 0.828 $\rightarrow$ 0.895 on \dataset{STL10}. In this sweep, depth therefore reorganizes geometry in a direction that makes the final token space more singular rather than less.
+
+\subsection{Qualitative Diagnostics}
+\paragraph{Irregular neighborhoods.}
+Include nearest-neighbor grids centered on highly irregular anchors, and annotate them with local dimension, minimum p-value, and source image context.
+
+\paragraph{Current artifact families.}
+The completed sweep already emits three paper-ready artifact families per representation: dashboards (\texttt{detail\_<rep>.png}), local scaling-curve panels (\texttt{scaling\_<rep>.png}), and irregular-anchor retrieval grids (\texttt{nn\_irregular\_<rep>.png}). Representative directories are \url{/scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/pixel_stratification_sweep/stl10_ps8_stride8/volume_probe} and \url{/scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/pretrained_pixel_sweep/stl10_dinov2_multilayer_full/volume_probe}.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.48\linewidth}
+  \centering
+  \fbox{\rule{0pt}{1.8in}\rule{0.95\linewidth}{0pt}}
+  \caption{Projection colored by irregularity}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\linewidth}
+  \centering
+  \fbox{\rule{0pt}{1.8in}\rule{0.95\linewidth}{0pt}}
+  \caption{Scaling curves for selected anchors}
+\end{subfigure}
+\caption{Planned paper figure layout for qualitative diagnostics. The current sweep already generated the underlying dashboards, scaling curves, and irregular-anchor retrieval grids for every completed representation.}
+\label{fig:qualitative}
+\end{figure}
+
+\section{Ablations and Sensitivity Analyses}
+\label{sec:ablations}
+
+\subsection{Probe Hyperparameters}
+\begin{itemize}[leftmargin=1.5em]
+\item Sensitivity to $k_{\min}$ and $k_{\max}$.
+\item Sensitivity to change-point window size.
+\item Sensitivity to significance threshold $\alpha$.
+\item Sensitivity to the number of sampled anchors.
+\end{itemize}
+
+\subsection{Projection and Visualization Robustness}
+\paragraph{Question.}
+Do the qualitative conclusions survive different 2D projections, random seeds, or subsampling levels?
+
+\paragraph{Suggested appendix figure.}
+Show PCA and t-SNE side by side for the same representation, colored by $\dimhat_i$ and $\irr_i$.
+
+\subsection{Distance Metric Choices}
+\paragraph{Optional analysis.}
+If relevant, compare Euclidean distance against cosine distance or normalized embeddings.
+
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Interpretation}
+\paragraph{Core message.}
+The current sweep suggests that representation learning does not simply remove singularities. Raw pixels are already highly stratified, TinyViT token spaces are even more irregular on average than the matched raw spaces, and DINOv2 patch embeddings can be smoother than the corresponding final token layers. In this sense, learning appears to redistribute and sometimes sharpen singular structure rather than collapsing it to one uniform smooth manifold.
+
+\paragraph{Points to discuss.}
+\begin{itemize}[leftmargin=1.5em]
+\item Why raw pixel spaces may already be highly stratified.
+\item Why patch embeddings can be smoother than final tokens in some pretrained models.
+\item Whether irregularity corresponds to object boundaries, texture transitions, or semantic ambiguity.
+\item How these findings relate to manifold hypotheses in representation learning.
+\end{itemize}
+
+\subsection{Limitations}
+\label{sec:limitations}
+\begin{itemize}[leftmargin=1.5em]
+\item Local dimension estimates depend on the chosen $k$-range and metric.
+\item Finite-sample effects can imitate weak change points.
+\item PCA and nearest-neighbor figures are diagnostic, not proof.
+\item Results on a few datasets and backbones do not establish universality.
+\item The current method detects geometric irregularity, not causally meaningful semantics by itself.
+\end{itemize}
+
+\subsection{Future Work}
+\begin{itemize}[leftmargin=1.5em]
+\item Extend the probe to language and multimodal token spaces.
+\item Connect local irregularity to downstream failure modes or calibration.
+\item Study training dynamics rather than only frozen representations.
+\item Compare against alternative intrinsic-dimension estimators.
+\item Investigate whether singular anchors are predictive of ambiguity or polysemy.
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related-work}
+\paragraph{Current framing.}
+The most relevant neighboring directions are intrinsic-dimension estimation \citep{facco2017estimating}, singular or stratified views of statistical learning \citep{watanabe2009algebraic}, recent token-geometry diagnostics based on fiber-bundle testing \citep{robinson2025token,robinson2025stratifiedrepo}, and modern visual representation backbones such as DINOv2 and TinyViT \citep{oquab2023dinov2,wu2022tinyvit}.
+
+\paragraph{Suggested buckets.}
+\begin{itemize}[leftmargin=1.5em]
+\item intrinsic dimension estimation and local manifold learning,
+\item stratified spaces and singular learning theory,
+\item geometry of deep visual representations,
+\item representation diagnostics for vision transformers,
+\item local scaling laws and nearest-neighbor geometry.
+\end{itemize}
+
+\paragraph{Writing guidance.}
+Keep this section comparative rather than encyclopedic: describe what prior work measures, what assumptions it makes, and what the present method reveals that those approaches miss.
+
+\section{Conclusion}
+\paragraph{Closing template.}
+This paper argues that local representation geometry is often stratified rather than smoothly manifold-like. Using no-training volume scaling and local change-point tests, the present sweep finds high raw-pixel irregularity throughout the tested grid, more irregular TinyViT tokens than matched raw pixels on average, and smoother DINOv2 patch embeddings than DINOv2 last-layer tokens. The main empirical implication is that representation quality cannot be summarized adequately by one global notion of smoothness; local singular structure must also be measured explicitly.
+
+\begin{ack}
+\TODO{Add funding, compute, and collaboration acknowledgments here. In anonymized submission mode, this block is hidden automatically by the NeurIPS style file.}
+\end{ack}
+
+\bibliographystyle{plainnat}
+\bibliography{STRATIFIED_REPRESENTATION_PAPER_SKELETON}
+
+\appendix
+
+\paragraph{Appendix usage.}
+Use the appendix for proofs, exhaustive ablations, implementation details, and full visualization galleries. Keep the core claims, methods, and headline experiments in the main paper.
+
+\section{Estimator Details}
+\paragraph{Include here.}
+\begin{itemize}[leftmargin=1.5em]
+\item derivation of the weighted log--log estimator,
+\item justification for smoothing the slope curve,
+\item exact form of the local change-point test,
+\item pseudocode for the pipeline.
+\end{itemize}
+
+\section{Additional Experimental Details}
+\paragraph{Suggested contents.}
+\begin{itemize}[leftmargin=1.5em]
+\item complete hyperparameter tables,
+\item dataset preprocessing details,
+\item exact run counts and failures,
+\item hardware/runtime table.
+\end{itemize}
+
+\section{Additional Figures}
+\paragraph{Suggested contents.}
+\begin{itemize}[leftmargin=1.5em]
+\item all dimension histograms,
+\item all irregularity histograms,
+\item all scaling-curve panels,
+\item all nearest-neighbor irregular-anchor grids.
+\end{itemize}
+
+\section{Artifact and Reproducibility Statement}
+\paragraph{Current artifact locations and commands.}
+\begin{itemize}[leftmargin=1.5em]
+\item Code snapshot used for the completed sweep: \url{/scratch/xl598/submission_snapshots/volume_probe_sweeps_20260413_154940/repo}.
+\item Environment used in practice: Conda environment \texttt{tinyvit}.
+\item Run root: \url{/scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep}.
+\item Sweep launcher: \texttt{scripts/launch\_volume\_probe\_sweeps\_slurm.sh}.
+\item Report aggregator: \texttt{scripts/analyze\_pixel\_sweep.py}.
+\item Report regeneration command:
+\begin{verbatim}
+conda run -n tinyvit python \
+  /scratch/xl598/submission_snapshots/volume_probe_sweeps_20260413_154940/repo/scripts/analyze_pixel_sweep.py \
+  --sweep-dir /scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/pixel_stratification_sweep \
+  --sweep-dir /scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/pretrained_pixel_sweep \
+  --output /scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/volume_probe_sweep_report.json \
+  --report /scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep/volume_probe_sweep_report.md
+\end{verbatim}
+\end{itemize}
+
+\input{checklist.tex}
+
+\end{document}
