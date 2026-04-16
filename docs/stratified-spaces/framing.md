@@ -13,11 +13,22 @@ In short: **continuous image signal removes discretization, not stratification**
 
 ## Relation To The Fiber-Bundle Paper
 
-The paper on token embeddings argues that local neighborhoods can violate both the classical manifold hypothesis and the more permissive fiber-bundle null when the local volume-vs-radius scaling changes in the wrong way. The image-space analogue is not "pixels are continuous, so the manifold hypothesis is restored." The analogue is:
+The paper on token embeddings argues that local neighborhoods can violate both the classical manifold hypothesis and the more permissive fiber-bundle null when the local volume-vs-radius scaling changes in the wrong way. The crucial analogy is geometric, not merely discrete-versus-continuous:
+
+- the token paper does **not** just say that token spaces are singular because tokens are discrete;
+- it says that local neighborhoods in token embedding space can violate even a smooth fiber-bundle null;
+- the image-space analogue is therefore **not** "pixels are continuous, so the manifold hypothesis is restored";
+- instead, the claim is that continuity of the ambient coordinates does not guarantee locally uniform dimension or fiber-bundle structure for the data distribution.
+
+In that sense, the right image-space analogue is:
 
 - text token space is discrete and strongly singular;
-- image pixel space is continuous but still geometrically heterogeneous;
+- image pixel space is continuous but still geometrically heterogeneous and locally stratified;
 - therefore the right test in image space is still a **stratified-manifold / fiber-bundle-style local scaling test**, not a single-manifold fit.
+
+Short version: **continuous ambient coordinates remove discretization, not singular local geometry**.
+
+An additional point in favor of the image-space experiment is that it is, in an important sense, \emph{finer-grained} than the token-embedding setting. The LLM paper studies a fixed discrete vocabulary embedded in latent space. Here, by contrast, we probe continuous raw patch neighborhoods and vary patch geometry across scale and overlap. So if stratification is visible already in image space, it is not a weak surrogate of the token-space result; it is evidence at an even more local geometric resolution.
 
 ## Experiment Framing
 
@@ -28,10 +39,28 @@ The clean experimental question is:
 Recommended representation ladder:
 
 1. `patch_pixels`
-2. `patch_pixels_stride_*` for overlapping local continuity
-3. `patch_embeddings`
-4. `tokens` or intermediate token layers
-5. discrete image tokens, if using the ImageGPT-style pipeline
+2. `patch_pixels_multiscale` over a finer patch-size grid
+3. `patch_pixels_stride_*` for overlapping local continuity
+4. `patch_embeddings`
+5. `tokens` or intermediate token layers
+6. discrete image tokens, if using the ImageGPT-style pipeline
+
+## Better Pixel-Space Granularity
+
+For pixel space specifically, the current grid already appears sufficient to establish the main qualitative claim: raw pixel space is stratified across multiple patch sizes and stride settings. A denser sweep would still be useful if the goal is to resolve the effect more precisely, so we can separate:
+
+- scale effects from representation effects;
+- patch-size effects from overlap effects;
+- genuine local stratification from artifacts of a sparse sweep grid.
+
+Concretely, the pixel-space sweep should be denser in both patch size and stride. A good default is:
+
+- smaller and intermediate patch sizes instead of only a few coarse settings;
+- multiple stride fractions for each valid patch size, not just full stride and half stride;
+- matched token budgets across scales so fine patches are not unfairly penalized;
+- per-scale summaries of `irregular_ratio`, `mean_dim`, `median_dim`, and neighborhood-dimension gaps.
+
+That lets the paper answer a sharper follow-up question: **at what spatial scale does raw pixel space begin to look strongly stratified, and how does that transition compare with learned patch embeddings and tokens?**
 
 ## Hypotheses
 
@@ -72,7 +101,7 @@ You can drop this directly into a report:
 
 ### Stratified-Space Hypothesis
 
-We test the hypothesis that natural-image representations are better viewed as stratified spaces than as single classical manifolds. Although raw pixel space is continuous, the image data distribution within that ambient space can still have nonuniform local dimension and singular transitions between regimes. We therefore compare raw patch pixels, learned patch embeddings, and token-space representations using the same local volume-scaling estimator.
+We test the hypothesis that natural-image representations are better viewed as stratified spaces than as single classical manifolds. Although raw pixel space is continuous, the image data distribution within that ambient space can still have nonuniform local dimension and singular transitions between regimes. This is the direct image-space analogue of the token-embedding result of Robinson et al.\ (2025): continuity of the coordinates does not imply manifold-like local geometry. We therefore compare raw patch pixels, learned patch embeddings, and token-space representations using the same local volume-scaling estimator.
 
 ### Evaluation Question
 
@@ -81,6 +110,7 @@ For each representation, we ask:
 - how often do local neighborhoods exhibit significant stratification or irregular slope changes?
 - how stable is local dimension across nearby points?
 - does learning reduce singularity, or merely move it to a different representation layer?
+- for raw pixels specifically, how does the answer change as we refine patch size and stride granularity?
 
 ### Expected Outcome
 
