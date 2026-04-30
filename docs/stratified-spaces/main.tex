@@ -12,6 +12,8 @@
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{url}
+\usepackage{silence}
+\WarningFilter{latex}{Command \showhyphens has changed}
 \usepackage{microtype}
 \usepackage{nicefrac}
 \usepackage{amsfonts}
@@ -42,6 +44,9 @@
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\figroot}{imgs/neurips_submission}
 
+% Avoid page-stretching warnings on float-heavy pages.
+\raggedbottom
+
 \title{Stratified Geometry in Vision Representations}
 \author{
   Anonymous Authors \\
@@ -52,13 +57,13 @@
 \maketitle
 
 \begin{abstract}
-We study whether raw pixel patches, untrained vision-transformer token spaces, and pretrained visual representations are well modeled by a single smooth manifold. We use a local log--log volume-scaling estimator together with a fiber-bundle change-point test to measure local dimension and irregularity across representation spaces. In an 18-run sweep over \dataset{CIFAR10} and \dataset{STL10}, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are consistently smoother than DINOv2 last-layer tokens. These results suggest that singular local geometry is already present in raw patch spaces and is often redistributed or sharpened, rather than removed, by later representation stages.
+We study whether continuous raw pixel patches, untrained vision-transformer token spaces, and pretrained visual representations are well modeled by a single smooth manifold. Motivated by recent evidence that language-model token embeddings often violate even a local fiber-bundle null \citep{robinson2025token}, we ask the analogous question for vision: does continuity of pixel coordinates eliminate stratification? We use a local log--log volume-scaling estimator together with a fiber-bundle change-point test to measure local dimension and irregularity across representation spaces. In an 18-run sweep over \dataset{CIFAR10} and \dataset{STL10}, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are consistently smoother than DINOv2 last-layer tokens. These results suggest that continuous ambient coordinates do not remove singular local geometry: raw patch spaces are already strongly stratified, and later representation stages often redistribute or sharpen that structure rather than remove it.
 \end{abstract}
 
 \section{Introduction}
-The manifold hypothesis is a common organizing intuition for representation learning, but it can be too coarse to describe spaces whose local geometry changes across scales or neighborhoods. Recent work on token embeddings argues that a local fiber-bundle null is frequently violated in language models \citep{robinson2025token}. We ask the analogous question for visual representations: are raw pixels, untrained token spaces, and pretrained visual features locally smooth, or do they exhibit measurable singular structure?
+The manifold hypothesis is a common organizing intuition for representation learning, but it can be too coarse to describe spaces whose local geometry changes across scales or neighborhoods. Recent work on token embeddings argues that a local fiber-bundle null is frequently violated in language models \citep{robinson2025token}. The key point is not merely that text tokens are discrete; it is that the learned embedding geometry can violate even a permissive smooth local null. We ask the analogous question for visual representations: if raw pixel patches live in a continuous ambient space, does that continuity actually restore local manifold behavior, or do raw pixels, untrained token spaces, and pretrained visual features still exhibit measurable singular structure? In one important sense, this is a finer-grained test bed than token embeddings: we probe continuous raw patch neighborhoods and vary patch geometry across spatial scale and overlap, rather than analyzing only a fixed discrete vocabulary.
 
-Our focus is empirical and local. Rather than fitting one global intrinsic dimension, we examine nearest-neighbor scaling around each anchor and test whether the corresponding local slope profile is stable or admits statistically meaningful regime changes. This yields both a local dimension estimate and an irregularity score. The central empirical observation is that raw vision patch spaces are already strongly stratified, and later representation stages do not uniformly smooth them.
+Our focus is empirical and local. Rather than fitting one global intrinsic dimension, we examine nearest-neighbor scaling around each anchor and test whether the corresponding local slope profile is stable or admits statistically meaningful regime changes. This yields both a local dimension estimate and an irregularity score. The central empirical observation is that continuity of the ambient coordinates does not remove stratification: raw vision patch spaces are already strongly stratified, and later representation stages do not uniformly smooth them.
 
 \paragraph{Contributions.}
 \begin{itemize}[leftmargin=1.5em]
@@ -101,6 +106,7 @@ The completed run set contains 18 experiments:
 \item 10 pixel/TinyViT sweep cells across patch sizes 4, 8, and 16 with full-stride and half-stride extraction where applicable,
 \item 8 pretrained-vs-pixel cells covering DINOv2 last-layer tokens, DINOv2 multilayer token slices, and an untrained TinyViT baseline.
 \end{itemize}
+This grid is modest but already sufficient for the paper's main qualitative claim: raw-pixel stratification persists across multiple patch sizes and stride settings. A denser pixel-space sweep would mainly refine where that effect turns on most strongly across spatial scales.
 
 \paragraph{Probe hyperparameters.}
 All reported runs use \texttt{max\_tokens=4096}, \texttt{vol\_min=8}, \texttt{vol\_max=128}, \texttt{ws=8}, \texttt{alpha=0.005}, and \texttt{nstrat=3}. Jobs were launched from a frozen snapshot in the \texttt{tinyvit} Conda environment on the \texttt{gpu-redhat} partition; jobs \texttt{51035214} and \texttt{51035215} completed successfully on \texttt{gpuk018}.
@@ -153,10 +159,11 @@ The pretrained sweep shows a clear split between DINOv2 patch embeddings and DIN
 
 \begin{table}[H]
 \centering
+\small
 \caption{DINOv2 comparison on the completed sweep.}
-\begin{tabular}{lcccc}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.23\linewidth}cc>{\raggedright\arraybackslash}p{0.28\linewidth}@{}}
 \toprule
-Dataset & Representation & Mean dim & Irregular ratio & Interpretation \\
+Dataset & Representation & Mean dim & Irreg. ratio & Interpretation \\
 \midrule
 CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & more irregular than raw and patch embeddings \\
 CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\
@@ -283,12 +290,12 @@ The global-dictionary run shows nonconstant sparse complexity along the fiber co
 If the token space behaved like a single locally homogeneous smooth manifold with essentially constant fiber type, then movement along a smooth coordinate would not be expected to induce large changes in the sparse complexity of the corresponding raw-patch neighborhoods under one shared dictionary. The observed changes therefore provide independent evidence that the representation has nonuniform local structure. We interpret this as evidence consistent with stratification: different regions along the empirical fiber coordinate have different effective local dimension and different raw-patch reconstruction complexity. This does not prove a formal stratification theorem or identify exact stratum boundaries, but it strengthens the empirical case that the geometry is not well summarized by one globally uniform manifold model.
 
 \section{Discussion}
-Three points stand out. First, raw pixel spaces are already highly stratified, so the interesting question is not whether learned models ``break'' a smooth manifold but how they redistribute singular structure already present in the data. Second, tokenization does not automatically smooth local geometry: the untrained TinyViT tokens are more irregular than matched raw pixels on average. Third, the DINOv2 comparison shows that smoothing can happen at the patch-embedding stage even when later token layers become more singular again.
+Three points stand out. First, raw pixel spaces are already highly stratified, so the interesting question is not whether learned models ``break'' a smooth manifold but how they redistribute singular structure already present in the data. This is the direct image-space analogue of the observation in \citet{robinson2025token}: continuity of the coordinates does not guarantee a locally smooth or even fiber-bundle-like data geometry. Moreover, the present image-space setting is arguably finer-grained than the token-embedding setting because it probes continuous local neighborhoods and multiple patch geometries rather than only a fixed vocabulary embedding. Second, tokenization does not automatically smooth local geometry: the untrained TinyViT tokens are more irregular than matched raw pixels on average. Third, the DINOv2 comparison shows that smoothing can happen at the patch-embedding stage even when later token layers become more singular again.
 
 This interpretation is broadly aligned with recent work arguing that local neighborhood structure in learned token spaces often violates manifold-style null hypotheses \citep{robinson2025token}. The present results extend that intuition into vision and suggest that local singularity diagnostics are useful even before training or semantic supervision.
 
 \section{Limitations}
-This is still a narrow study. It covers only two datasets, one untrained TinyViT configuration, and one pretrained DINOv2 backbone. The local dimension estimator depends on the selected $k$-range and metric, and the qualitative figures are diagnostic rather than proof. The current probe detects geometric irregularity, not semantics or causality by itself. A stronger paper should expand the dataset range, study training dynamics directly, and compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}.
+This is still a narrow study. It covers only two datasets, one untrained TinyViT configuration, and one pretrained DINOv2 backbone. The local dimension estimator depends on the selected $k$-range and metric, and the qualitative figures are diagnostic rather than proof. The current probe detects geometric irregularity, not semantics or causality by itself. A denser raw-pixel sweep could localize the onset scale of stratification more precisely, but the present experiments already show that the effect is not confined to a single patch geometry. A stronger paper should expand the dataset range, study training dynamics directly, and compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}.
 
 \section{Conclusion}
 The completed sweep supports a simple conclusion: visual representation spaces are often locally stratified rather than uniformly smooth. Raw pixels are already highly irregular, TinyViT tokens are more irregular than matched raw pixels on average, and DINOv2 patch embeddings are smoother than DINOv2 final-layer tokens. Local geometric diagnostics therefore expose structure that a single global manifold summary would miss.
@@ -298,7 +305,7 @@ The completed sweep supports a simple conclusion: visual representation spaces a
 \end{ack}
 
 \bibliographystyle{plainnat}
-\bibliography{STRATIFIED_REPRESENTATION_PAPER_SKELETON}
+\bibliography{refs}
 
 \appendix
 

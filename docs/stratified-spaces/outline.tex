@@ -16,6 +16,8 @@
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{url}
+\usepackage{silence}
+\WarningFilter{latex}{Command \showhyphens has changed}
 \usepackage{microtype}
 \usepackage{nicefrac}
 \usepackage{amsfonts}
@@ -50,6 +52,9 @@
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
 
+% Avoid page-stretching warnings on float-heavy pages.
+\raggedbottom
+
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}
 \newtheorem{assumption}{Assumption}
@@ -81,7 +86,7 @@
 \maketitle
 
 \begin{abstract}
-This paper investigates whether raw pixel patches, learned token spaces, and pretrained visual representations exhibit \emph{stratified geometric structure}. The core claim is that local volume scaling and change-point tests over nearest-neighbor radii reveal non-uniform dimensional regimes that are hidden by global summaries. We introduce \method, a no-training diagnostic for estimating local dimension and irregularity across representation spaces, and pair it with \fiber, a hypothesis test for detecting local stratification boundaries. Across an 18-run sweep over dataset, patch size, stride, backbone, and layer depth, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are smoother than DINOv2 last-layer tokens, whose irregularity is never lower than matched raw pixels in this sweep. The resulting evidence argues against a single smooth-manifold account even in simple vision patch spaces and motivates localized geometric diagnostics.
+This paper investigates whether raw pixel patches, learned token spaces, and pretrained visual representations exhibit \emph{stratified geometric structure}. The core claim is that local volume scaling and change-point tests over nearest-neighbor radii reveal non-uniform dimensional regimes that are hidden by global summaries, even when the ambient coordinates are continuous. Motivated by recent evidence that language-model token embeddings often violate even a local fiber-bundle null \citep{robinson2025token}, we ask the analogous question for vision: does continuity of pixel coordinates eliminate stratification? We introduce \method, a no-training diagnostic for estimating local dimension and irregularity across representation spaces, and pair it with \fiber, a hypothesis test for detecting local stratification boundaries. Across an 18-run sweep over dataset, patch size, stride, backbone, and layer depth, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are smoother than DINOv2 last-layer tokens, whose irregularity is never lower than matched raw pixels in this sweep. The resulting evidence argues against a single smooth-manifold account even in simple vision patch spaces and motivates localized geometric diagnostics.
 \end{abstract}
 
 \section{Introduction}
@@ -89,10 +94,10 @@ This paper investigates whether raw pixel patches, learned token spaces, and pre
 Modern representation learning pipelines map images into token or feature spaces whose geometry is rarely interrogated beyond linear probing or retrieval metrics. This paper focuses on a stronger question: are these spaces locally manifold-like, or do they contain singular strata with changing intrinsic dimension?
 
 \paragraph{Motivation.}
-If representation spaces are stratified rather than smooth, then averaging geometry globally can conceal the phenomena that matter for robustness, semantic branching, and compositional reuse. A local estimator is therefore needed.
+If representation spaces are stratified rather than smooth, then averaging geometry globally can conceal the phenomena that matter for robustness, semantic branching, and compositional reuse. The motivating point is not that only discrete token spaces can be singular. Rather, even when image data are represented in continuous pixel coordinates, the sampled data distribution can still violate manifold-like local regularity. A local estimator is therefore needed.
 
 \paragraph{Main thesis.}
-Our working thesis is that vision representations are better modeled as \emph{piecewise smooth spaces with singular transitions} than as single smooth manifolds.
+Our working thesis is that vision representations are better modeled as \emph{piecewise smooth spaces with singular transitions} than as single smooth manifolds. Continuous ambient coordinates remove discretization, but they do not remove stratification.
 
 \paragraph{Contributions.}
 \begin{itemize}[leftmargin=1.5em]
@@ -100,6 +105,7 @@ Our working thesis is that vision representations are better modeled as \emph{pi
 \item We provide a reproducible 18-run sweep over raw pixel patches, learned TinyViT tokens, and pretrained DINOv2 representations.
 \item We introduce qualitative diagnostics that pair local irregularity with patch retrievals, PCA projections, and scaling-curve visualizations, and we generate these artifacts for every completed run.
 \item We show empirically that overlapping patches do not dominate the effect, that TinyViT tokens are more irregular than matched raw pixels on average, and that DINOv2 patch embeddings can be smoother than the corresponding final token layers.
+\item We show that the existing raw-pixel sweep is already broad enough to establish stratification across multiple patch sizes and stride settings, while a finer-grained sweep would refine the onset scale of that effect.
 \item We release code, configs, and experiment reports for direct reproduction.
 \end{itemize}
 
@@ -116,6 +122,9 @@ Let $\mathcal{X}$ denote the image domain and $f:\mathcal{X}\to\R^m$ a represent
 
 \paragraph{Operational question.}
 Given samples $\{z_i\}_{i=1}^n \subset \R^m$, can we detect whether local neighborhoods around $z_i$ are consistent with one stable scaling regime, or whether they contain evidence of multiple regimes?
+
+\paragraph{Relation to token-space results.}
+Recent work on language-model token embeddings shows that local neighborhoods can violate not only a manifold null, but even a more permissive smooth fiber-bundle null \citep{robinson2025token}. The visual analogue of that result is not that pixels become token-like because they are discrete; pixels are not discrete in that sense. The analogue is that continuity of the ambient representation does not guarantee locally uniform dimension or smooth bundle structure for the data distribution. This paper tests that claim directly in image space. In one important sense, the image-space setting is finer-grained than the token-embedding setting: we probe continuous raw patch neighborhoods and vary patch geometry across scale and overlap, rather than analyzing only a fixed discrete vocabulary embedding.
 
 \subsection{Local Volume Scaling}
 For each anchor point $z_i$, let $r_k(i)$ denote the distance to its $k$th nearest neighbor. Under ideal smooth-manifold assumptions, neighborhood volume scales approximately as
@@ -214,8 +223,8 @@ The paper should include at least four visualization families:
 Axis & Values / examples \\
 \midrule
 Dataset & CIFAR10, STL10 \\
-Patch size & 4, 8, 16, 14 for DINOv2-native grids \\
-Stride & full stride, half stride \\
+Patch size & 4, 8, 16, 14 for DINOv2-native grids; optional denser multiscale raw-pixel follow-up \\
+Stride & full stride, half stride; optional additional stride fractions for finer pixel-space resolution \\
 Backbone & raw pixels, TinyViT, DINOv2 \\
 Representation type & patch pixels, patch embeddings, tokens, intermediate layers \\
 Probe hyperparameters & $k_{\min}=8$, $k_{\max}=128$, window size $=8$, significance level $\alpha=0.005$ \\
@@ -237,6 +246,7 @@ Probe hyperparameters & $k_{\min}=8$, $k_{\max}=128$, window size $=8$, signific
 \paragraph{Current sweep configuration.}
 \begin{itemize}[leftmargin=1.5em]
 \item Completed runs: 18 total, comprising 10 raw-pixel/TinyViT sweep cells and 8 pretrained-vs-pixel sweep cells.
+\item The current raw-pixel grid is already sufficient to show that the qualitative stratification signal persists across multiple patch geometries; a denser grid would mainly sharpen the onset-scale analysis.
 \item Frozen snapshot used for submission: \url{/scratch/xl598/submission_snapshots/volume_probe_sweeps_20260413_154940/repo}.
 \item Runtime environment: Conda environment \texttt{tinyvit}; submission partition \texttt{gpu-redhat}; jobs \texttt{51035214} and \texttt{51035215} ran on node \texttt{gpuk018} for 23m23s and 18m27s, respectively.
 \item Probe settings: \texttt{max\_tokens=4096}, \texttt{vol\_min=8}, \texttt{vol\_max=128}, \texttt{ws=8}, \texttt{alpha=0.005}, and \texttt{nstrat=3}.
@@ -296,10 +306,11 @@ Contrast DINOv2 last-layer tokens, DINO patch embeddings, and matched raw-pixel 
 
 \begin{table}[H]
 \centering
+\small
 \caption{Pretrained representation comparison from the April 2026 sweep.}
-\begin{tabular}{lcccc}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.23\linewidth}cc>{\raggedright\arraybackslash}p{0.28\linewidth}@{}}
 \toprule
-Dataset & Representation & Mean dim & Irregular ratio & Notes \\
+Dataset & Representation & Mean dim & Irreg. ratio & Notes \\
 \midrule
 CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & higher irregularity than raw and patch embeddings \\
 CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\
@@ -388,6 +399,7 @@ The current sweep suggests that representation learning does not simply remove s
 \item Finite-sample effects can imitate weak change points.
 \item PCA and nearest-neighbor figures are diagnostic, not proof.
 \item Results on a few datasets and backbones do not establish universality.
+\item The current raw-pixel sweep does not localize the exact spatial scale at which stratification emerges as precisely as a denser multiscale grid would.
 \item The current method detects geometric irregularity, not causally meaningful semantics by itself.
 \end{itemize}
 
@@ -396,6 +408,7 @@ The current sweep suggests that representation learning does not simply remove s
 \item Extend the probe to language and multimodal token spaces.
 \item Connect local irregularity to downstream failure modes or calibration.
 \item Study training dynamics rather than only frozen representations.
+\item Optionally run a denser multiscale raw-pixel sweep over patch size and stride to map stratification onset more precisely.
 \item Compare against alternative intrinsic-dimension estimators.
 \item Investigate whether singular anchors are predictive of ambiguity or polysemy.
 \end{itemize}
@@ -426,7 +439,7 @@ This paper argues that local representation geometry is often stratified rather 
 \end{ack}
 
 \bibliographystyle{plainnat}
-\bibliography{STRATIFIED_REPRESENTATION_PAPER_SKELETON}
+\bibliography{refs}
 
 \appendix
 

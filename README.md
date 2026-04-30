@@ -97,7 +97,7 @@ python src/train.py +experiment=volume_probe data.root=./data
 
 Outputs go to `runs/hydra/.../volume_probe/volume_summary.json` (includes per-representation `summary` + `knn_curve`) plus per-representation `*_dims.npy`.
 
-See `docs/STRATIFIED_PIXEL_SPACE.md` for the intended interpretation of these probes and a concrete experiment framing.
+See `docs/stratified-spaces/framing.md` for the intended interpretation of these probes and a concrete experiment framing.
 
 To log to W&B:
 
