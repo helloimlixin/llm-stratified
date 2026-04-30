@@ -235,29 +235,7 @@ To make the dimension estimates visually inspectable, we also include auxiliary 
 \end{figure}
 
 \paragraph{Global dictionary sparse probe.}
-We further probe whether movement along the representation fiber coordinate changes the raw-patch complexity needed for local reconstruction. This diagnostic uses a separate 50-epoch \dataset{STL10} trained TinyViT run with patch size 4, embedding dimension 192, depth 8, AdamW learning rate $3\times 10^{-4}$, weight decay 0.05, seed 1337, and fiber diagnostics every 10 epochs. The fiber estimator uses \texttt{max\_tokens=1024}, \texttt{vol\_min=8}, \texttt{vol\_max=64}, \texttt{ws=8}, \texttt{alpha=0.005}, and \texttt{nstrat=3}. The sparse probe requests up to 64 anchors, drops anchors with fewer than 12 patches in their local neighborhood, and codes raw patches with orthogonal matching pursuit against a 32-atom dictionary with maximum sparsity 16 and target relative residual 0.15.
-
-\paragraph{Fiber coordinate implementation.}
-The coordinate used here is not a separately learned chart. It is the first principal coordinate of the centered token cloud,
-\begin{equation}
-  t_i = v_1^\top (z_i - \bar z),
-\end{equation}
-where $z_i$ is a token embedding, $\bar z$ is the empirical token mean, and $v_1$ is the first PCA direction of the collected token embeddings at that checkpoint. Anchors are selected approximately evenly along the sorted $t_i$ values. Around each anchor $i$, the probe forms an $\epsilon$-ball in representation space,
-\begin{equation}
-  N_i = \{j : \lVert z_j - z_i \rVert_2 \le \epsilon\},
-\end{equation}
-then extracts the raw image patches corresponding to tokens in $N_i$. The radius is chosen separately at each checkpoint as
-\begin{equation}
-  \epsilon = \operatorname{median}_i r_{32}(i),
-\end{equation}
-where $r_{32}(i)$ is the Euclidean distance from token $i$ to its 32nd nearest neighbor in token-embedding space. Thus the sparse-probe panels use one checkpoint-level token-space radius rather than a manually fixed pixel-space radius.
-
-\paragraph{Global versus local dictionaries.}
-The key control is that the dictionary is global within each checkpoint. All raw patches gathered from all evaluated neighborhoods are pooled, standardized, and used to fit one shared PCA dictionary $D$ with 32 atoms. Each neighborhood is then coded against the same $D$. For a raw patch $x$, the sparse level is the smallest number of atoms needed by orthogonal matching pursuit to reach
-\begin{equation}
-  \frac{\lVert x - D_S c_S \rVert_2}{\lVert x \rVert_2} \le 0.15,
-\end{equation}
-subject to $|S|\le 16$. The anchor score is the mean required sparsity over patches in $N_i$. Because the dictionary is shared, variation in sparsity along $t_i$ cannot be explained by refitting a more favorable dictionary separately for each anchor neighborhood.
+We further ask whether raw-patch sparse complexity changes as one moves along the empirical fiber coordinate. This auxiliary diagnostic uses a separate 50-epoch \dataset{STL10} trained TinyViT run. At each checkpoint, tokens are ordered by their first PCA coordinate, which we use as a simple one-dimensional fiber coordinate. We select anchors along this coordinate, gather the raw image patches in each anchor's local token neighborhood, and fit one shared 32-atom dictionary from the pooled patches. Each neighborhood is then coded against this same dictionary, and its sparse complexity is the mean number of atoms needed to reconstruct its patches to a fixed residual tolerance. The key control is the shared dictionary: if the required sparsity changes along the fiber coordinate, the change reflects that some regions are easier or harder for the same dictionary to represent, rather than a consequence of fitting a separate local dictionary for each region.
 
 \begin{table}[H]
 \centering
@@ -277,12 +255,15 @@ Epoch & Anchors & $\epsilon$ & Mean sparsity & TV & Corr(sparsity, dim) \\
 \label{tab:sparse-global}
 \end{table}
 
-The global-dictionary run shows nonconstant sparse complexity along the fiber coordinate. Mean required sparsity remains high, about 13.3--14.5 atoms, and the sparsity trajectory has substantial total variation along sorted $t_i$ values. The correlation between required sparsity and local dimension is positive at every reported checkpoint, ranging from 0.37 to 0.53. This supports the interpretation that high-dimensional token neighborhoods tend to correspond to raw-patch neighborhoods that require more shared dictionary atoms to reconstruct.
+The global-dictionary run shows nonconstant sparse complexity along the fiber coordinate. Mean required sparsity remains high, about 13.3--14.5 atoms, and the sparsity trajectory has substantial total variation along the sorted fiber-coordinate values. The correlation between required sparsity and local dimension is positive at every reported checkpoint, ranging from 0.37 to 0.53. This supports the interpretation that high-dimensional token neighborhoods tend to correspond to raw-patch neighborhoods that require more shared dictionary atoms to reconstruct.
+
+\paragraph{Color encoding in the sparse-probe plots.}
+The point colors in \Cref{fig:sparse-global} are diagnostic encodings, not class labels. In the upper-right panel, color denotes mean required sparsity, matching the colorbar: brighter points require more dictionary atoms on average. In the lower two scatter plots, color denotes the number of raw patches in the anchor's $\epsilon$-ball neighborhood, using the displayed patch-count colorbars. This exposes whether an apparent relationship between local dimension, irregularity, and sparse complexity is also coupled to neighborhood support size; yellow-green points have more patches in the $\epsilon$-ball, while darker purple points have fewer. The first panel is a one-dimensional trajectory along the sorted fiber coordinate and uses a fixed line color.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\linewidth]{\figroot/sparse_global_epoch049.png}
-\caption{Sparse dictionary probe at epoch 49 for the auxiliary global-dictionary run. The first panel shows the sparsity trajectory along the PCA-1 fiber coordinate; the remaining panels compare fiber coordinate, local dimension, irregularity, patch count, and required sparsity.}
+\caption{Sparse dictionary probe at epoch 49 for the auxiliary global-dictionary run. The first panel shows the sparsity trajectory along the PCA-1 fiber coordinate. The upper-right scatter colors anchors by mean required sparsity, while the lower dimension/sparsity and irregularity/sparsity scatters color anchors by $\epsilon$-ball patch count.}
 \label{fig:sparse-global}
 \end{figure}
 

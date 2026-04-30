@@ -295,13 +295,15 @@ def _build_sparse_probe_plot(
     ax1.set_ylabel("epsilon-ball patch count")
     ax1.set_title("Patch Count and Sparse Complexity")
 
-    ax2.scatter(dims, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
+    scatter_dim = ax2.scatter(dims, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
+    plt.colorbar(scatter_dim, ax=ax2, fraction=0.046, pad=0.04, label="patch count")
     ax2.set_xlabel("local dimension")
     ax2.set_ylabel("mean required sparsity")
     ax2.set_title("Local Dimension vs Sparse Complexity")
     ax2.grid(alpha=0.25)
 
-    ax3.scatter(irregularity, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
+    scatter_irr = ax3.scatter(irregularity, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
+    plt.colorbar(scatter_irr, ax=ax3, fraction=0.046, pad=0.04, label="patch count")
     ax3.set_xlabel("-log10(min p-value)")
     ax3.set_ylabel("mean required sparsity")
     ax3.set_title("Irregularity vs Sparse Complexity")
