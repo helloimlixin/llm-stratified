@@ -40,7 +40,7 @@ from typing import Any
 
 import torch
 
-from training.configs import build_fiber_config
+from training.config import make_fiber_config
 from training.loops import (
     evaluate,
     evaluate_accelerate,
@@ -85,15 +85,15 @@ def run_training(*args, **kwargs) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_hydra(cfg: Any) -> None:
+def run_from_hydra_config(cfg: Any) -> None:
     from hydra.core.hydra_config import HydraConfig
     from omegaconf import OmegaConf
 
-    from training.hydra_app import (
-        maybe_run_sam_fiber,
-        maybe_run_volume_probe,
-        prepare_output_paths,
-        run_training_from_cfg,
+    from training.app import (
+        create_run_paths,
+        run_sam_fiber_job_if_enabled,
+        run_training_job_from_config,
+        run_volume_probe_job_if_enabled,
     )
     from training.wandb_utils import ensure_wandb_dir
 
@@ -109,23 +109,23 @@ def _run_hydra(cfg: Any) -> None:
     print(f"Output directory: {output_dir}")
     ensure_wandb_dir(enabled=cfg.wandb.enabled, output_dir=output_dir)
 
-    fiber_cfg = build_fiber_config(cfg.fiber, patch_size=cfg.model.patch_size)
-    paths = prepare_output_paths(
+    fiber_config = make_fiber_config(cfg.fiber, patch_size=cfg.model.patch_size)
+    paths = create_run_paths(
         cfg.paths,
         output_dir,
-        fiber_enabled=fiber_cfg.enabled,
+        fiber_enabled=fiber_config.enabled,
         sam_fiber_enabled=bool(getattr(cfg.sam_fiber, "enabled", False)),
     )
 
-    if maybe_run_volume_probe(cfg, paths):
+    if run_volume_probe_job_if_enabled(cfg, paths):
         return
-    if maybe_run_sam_fiber(cfg, paths):
+    if run_sam_fiber_job_if_enabled(cfg, paths):
         return
 
-    run_training_from_cfg(cfg, paths, fiber_cfg)
+    run_training_job_from_config(cfg, paths, fiber_config)
 
 
-def _run_hydra_main() -> None:
+def run_hydra_cli() -> None:
     try:
         import hydra
         from omegaconf import DictConfig
@@ -134,13 +134,13 @@ def _run_hydra_main() -> None:
 
     @hydra.main(version_base=None, config_path="../configs", config_name="config")
     def _main(cfg: DictConfig) -> None:
-        _run_hydra(cfg)
+        run_from_hydra_config(cfg)
 
     _main()
 
 
 def main() -> None:
-    _run_hydra_main()
+    run_hydra_cli()
 
 
 if __name__ == "__main__":

@@ -38,6 +38,16 @@ class FiberConfig:
     vit_token_polysemy_ablate_batches: int = 10
     vit_token_polysemy_min_count: int = 50
     vit_token_polysemy_ablate_reps: int = 5
+    sparse_probe: bool = False
+    sparse_probe_radius: Optional[float] = None
+    sparse_probe_auto_neighbor_k: int = 32
+    sparse_probe_auto_radius_quantile: float = 0.5
+    sparse_probe_min_patches: int = 12
+    sparse_probe_max_anchors: int = 64
+    sparse_probe_dictionary_size: int = 32
+    sparse_probe_residual_threshold: float = 0.15
+    sparse_probe_max_sparsity: int = 16
+    sparse_probe_global_dictionary: bool = False
 
 
 @dataclass
@@ -86,7 +96,7 @@ class SamFiberConfig:
     embedding_animation_fps: int = 1
 
 
-def _get_field_value(source: Any, name: str, default: Any) -> Any:
+def _read_field(source: Any, name: str, default: Any) -> Any:
     if hasattr(source, "get"):
         try:
             return source.get(name, default)
@@ -95,67 +105,59 @@ def _get_field_value(source: Any, name: str, default: Any) -> Any:
     return getattr(source, name, default)
 
 
-def normalize_fiber_config(fiber_cfg: FiberConfig, patch_size: int) -> FiberConfig:
-    """Ensure fiber config is consistent with the patch size."""
-    if fiber_cfg.neighborhood_size is None:
-        fiber_cfg.neighborhood_size = max(patch_size * 2, patch_size + 1)
-    elif fiber_cfg.neighborhood_size <= patch_size:
-        fiber_cfg.neighborhood_size = patch_size + 1
-    return fiber_cfg
+def _config_values(source: Any, config_type: Any, *, enabled: Optional[bool] = None) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for field in fields(config_type):
+        default = field.default
+        if field.name == "enabled" and enabled is not None:
+            values[field.name] = enabled
+        else:
+            values[field.name] = _read_field(source, field.name, default)
+    return values
 
 
-def build_fiber_config(
+def _normalize_fiber_config(config: FiberConfig, patch_size: int) -> FiberConfig:
+    if config.neighborhood_size is None:
+        config.neighborhood_size = max(patch_size * 2, patch_size + 1)
+    elif config.neighborhood_size <= patch_size:
+        config.neighborhood_size = patch_size + 1
+    return config
+
+
+def make_fiber_config(
     source: Any,
     *,
     enabled: Optional[bool] = None,
     patch_size: Optional[int] = None,
 ) -> FiberConfig:
-    """Build FiberConfig from an args/config object and apply defaults."""
-    data: dict[str, Any] = {}
-    for field in fields(FiberConfig):
-        if field.name == "enabled":
-            data[field.name] = enabled if enabled is not None else _get_field_value(source, field.name, field.default)
-        else:
-            data[field.name] = _get_field_value(source, field.name, field.default)
-    fiber_cfg = FiberConfig(**data)
+    config = FiberConfig(**_config_values(source, FiberConfig, enabled=enabled))
     if patch_size is not None:
-        normalize_fiber_config(fiber_cfg, patch_size)
-    return fiber_cfg
+        _normalize_fiber_config(config, patch_size)
+    return config
 
 
-def build_volume_probe_config(
+def make_volume_probe_config(
     source: Any,
     *,
     enabled: Optional[bool] = None,
 ) -> VolumeProbeConfig:
-    data: dict[str, Any] = {}
-    for field in fields(VolumeProbeConfig):
-        if field.name == "enabled":
-            data[field.name] = enabled if enabled is not None else _get_field_value(source, field.name, field.default)
-        else:
-            data[field.name] = _get_field_value(source, field.name, field.default)
-    return VolumeProbeConfig(**data)
+    return VolumeProbeConfig(**_config_values(source, VolumeProbeConfig, enabled=enabled))
 
 
-def normalize_sam_fiber_config(sam_cfg: SamFiberConfig) -> SamFiberConfig:
-    analysis_patch_size = max(1, int(sam_cfg.analysis_patch_size))
-    sam_cfg.analysis_patch_size = analysis_patch_size
-    if sam_cfg.neighborhood_size is None:
-        sam_cfg.neighborhood_size = max(analysis_patch_size * 2, analysis_patch_size + 1)
-    elif sam_cfg.neighborhood_size <= analysis_patch_size:
-        sam_cfg.neighborhood_size = analysis_patch_size + 1
-    return sam_cfg
+def _normalize_sam_fiber_config(config: SamFiberConfig) -> SamFiberConfig:
+    analysis_patch_size = max(1, int(config.analysis_patch_size))
+    config.analysis_patch_size = analysis_patch_size
+    if config.neighborhood_size is None:
+        config.neighborhood_size = max(analysis_patch_size * 2, analysis_patch_size + 1)
+    elif config.neighborhood_size <= analysis_patch_size:
+        config.neighborhood_size = analysis_patch_size + 1
+    return config
 
 
-def build_sam_fiber_config(
+def make_sam_fiber_config(
     source: Any,
     *,
     enabled: Optional[bool] = None,
 ) -> SamFiberConfig:
-    data: dict[str, Any] = {}
-    for field in fields(SamFiberConfig):
-        if field.name == "enabled":
-            data[field.name] = enabled if enabled is not None else _get_field_value(source, field.name, field.default)
-        else:
-            data[field.name] = _get_field_value(source, field.name, field.default)
-    return normalize_sam_fiber_config(SamFiberConfig(**data))
+    config = SamFiberConfig(**_config_values(source, SamFiberConfig, enabled=enabled))
+    return _normalize_sam_fiber_config(config)

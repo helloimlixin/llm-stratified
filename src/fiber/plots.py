@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
-import scipy.stats
 import torch
 from PIL import Image, ImageDraw, ImageFilter
 
-from data import get_norm_stats
 from utils import denormalize_images
+
+try:
+    import scipy.stats as scipy_stats
+except Exception:  # pragma: no cover
+    scipy_stats = None
 
 try:
     import matplotlib
@@ -38,6 +41,23 @@ def _require_matplotlib():
     return plt
 
 
+def _corrcoef_safe(x: np.ndarray, y: np.ndarray) -> float:
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.size < 2 or y.size < 2:
+        return float("nan")
+    if np.allclose(x, x[0]) or np.allclose(y, y[0]):
+        return float("nan")
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def _rank_positions(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(np.asarray(values, dtype=np.float64), kind="mergesort")
+    ranks = np.empty(order.shape[0], dtype=np.float64)
+    ranks[order] = np.arange(order.shape[0], dtype=np.float64)
+    return ranks
+
+
 def matplotlib_supports_3d() -> bool:
     if plt is None:
         return False
@@ -52,13 +72,13 @@ def matplotlib_supports_3d() -> bool:
 # Projection helpers
 # ---------------------------------------------------------------------------
 
-def project_embeddings_3d(embeddings: torch.Tensor) -> np.ndarray:
+def project_embeddings_pca_3d(embeddings: torch.Tensor) -> np.ndarray:
     centered = embeddings - embeddings.mean(dim=0, keepdim=True)
     _, _, v = torch.pca_lowrank(centered, q=3)
     return (centered @ v[:, :3]).cpu().numpy()
 
 
-def project_embeddings_2d(
+def project_embeddings_pca_2d(
     embeddings: torch.Tensor,
     *,
     mean: torch.Tensor | None = None,
@@ -84,7 +104,7 @@ def project_embeddings_2d(
     return coords[:, :2].numpy(), mean, basis
 
 
-def tsne_embeddings_3d(
+def project_embeddings_tsne_3d(
     embeddings: torch.Tensor,
     perplexity: float = 30.0,
     seed: int = 42,
@@ -287,7 +307,7 @@ def _add_embedding_scatter_subplot(fig, subplot_spec, coords: np.ndarray, colors
     return ax, sc
 
 
-def plot_progress(
+def save_training_summary_plot(
     train_history: List[Dict],
     fiber_history: List[Dict],
     final_coords_3d: np.ndarray,
@@ -316,7 +336,7 @@ def plot_progress(
     fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
 
 
-def make_embedding_figure_3d(
+def build_embedding_scatter_figure(
     coords3d: np.ndarray, dims: np.ndarray, title: str = "Embeddings (PCA 3D)"
 ):
     plt_mod = _require_matplotlib()
@@ -326,11 +346,11 @@ def make_embedding_figure_3d(
     return fig
 
 
-def make_embedding_figure_tsne(coords3d: np.ndarray, dims: np.ndarray):
-    return make_embedding_figure_3d(coords3d, dims, "Embeddings (t-SNE 3D)")
+def build_tsne_embedding_figure(coords3d: np.ndarray, dims: np.ndarray):
+    return build_embedding_scatter_figure(coords3d, dims, "Embeddings (t-SNE 3D)")
 
 
-def make_polysemy_irregularity_plot(
+def save_polysemy_irregularity_plot(
     *,
     entropies: np.ndarray,
     fiber_results: List[Dict[str, Any]],
@@ -356,8 +376,12 @@ def make_polysemy_irregularity_plot(
     pearson_r, pearson_p = (float("nan"), float("nan"))
     spearman_r, spearman_p = (float("nan"), float("nan"))
     if ent.size > 2:
-        pearson_r, pearson_p = scipy.stats.pearsonr(ent, irr)
-        spearman_r, spearman_p = scipy.stats.spearmanr(ent, irr)
+        if scipy_stats is not None:
+            pearson_r, pearson_p = scipy_stats.pearsonr(ent, irr)
+            spearman_r, spearman_p = scipy_stats.spearmanr(ent, irr)
+        else:
+            pearson_r = _corrcoef_safe(ent, irr)
+            spearman_r = _corrcoef_safe(_rank_positions(ent), _rank_positions(irr))
 
     ent_rej, ent_ok = ent[rejected], ent[~rejected]
     stats = {
@@ -387,7 +411,7 @@ def make_polysemy_irregularity_plot(
     return out_path, stats
 
 
-def make_polysemy_entropy_scatter(
+def save_polysemy_entropy_scatter_plot(
     polysemy_result: Dict[str, Any],
     *,
     out_dir: Path,
@@ -449,7 +473,7 @@ def _singular_token_mask(fiber_results: List[Dict[str, Any]], alpha: float) -> n
     return rejected
 
 
-def select_singular_token_indices(
+def select_singular_tokens(
     *, fiber_results: List[Dict[str, Any]], alpha: float, top_k: int
 ) -> List[int]:
     min_p, irr, rejected = _compute_irregularity_scores(fiber_results, alpha)
@@ -461,7 +485,7 @@ def select_singular_token_indices(
     return [int(i) for i in picks if math.isfinite(min_p[int(i)])]
 
 
-def select_irregular_images(
+def select_irregular_tokens(
     images: torch.Tensor,
     image_ids: torch.Tensor,
     labels: torch.Tensor,
@@ -554,3 +578,15 @@ def _wandb_image_or_none(*, wandb_module, key: str, build_fn):
     except Exception as exc:
         print(f"[wandb] skipped {key}: {exc}")
         return None
+
+
+project_embeddings_3d = project_embeddings_pca_3d
+project_embeddings_2d = project_embeddings_pca_2d
+tsne_embeddings_3d = project_embeddings_tsne_3d
+plot_progress = save_training_summary_plot
+make_embedding_figure_3d = build_embedding_scatter_figure
+make_embedding_figure_tsne = build_tsne_embedding_figure
+make_polysemy_irregularity_plot = save_polysemy_irregularity_plot
+make_polysemy_entropy_scatter = save_polysemy_entropy_scatter_plot
+select_singular_token_indices = select_singular_tokens
+select_irregular_images = select_irregular_tokens

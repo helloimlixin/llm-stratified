@@ -7,7 +7,7 @@ import random
 import numpy as np
 import torch
 
-from data import get_norm_stats
+from datasets import get_dataset_normalization
 
 try:
     from omegaconf import OmegaConf
@@ -39,7 +39,7 @@ def denormalize_images(imgs: torch.Tensor, dataset: str) -> torch.Tensor:
     Returns:
         Denormalized images clamped to [0, 1]
     """
-    mean, std = get_norm_stats(dataset, imgs.device, as_tensor=True)
+    mean, std = get_dataset_normalization(dataset, imgs.device, as_tensor=True)
     return (imgs * std.view(1, 3, 1, 1) + mean.view(1, 3, 1, 1)).clamp(0, 1)
 
 

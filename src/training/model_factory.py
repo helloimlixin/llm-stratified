@@ -4,7 +4,7 @@ from typing import Optional
 
 import torch.nn as nn
 
-from models import TinyViT, TimmViTWrapper, resolve_patch_size
+from models import FrozenBackboneClassifier, TinyViT, TimmViTWrapper, resolve_patch_size
 
 
 def build_classifier_model(
@@ -20,9 +20,22 @@ def build_classifier_model(
     dropout_rate: float,
     timm_model: Optional[str],
     timm_pretrained: bool,
+    frozen_backbone: Optional[str] = None,
+    frozen_backbone_model: Optional[str] = None,
     announce: bool = False,
 ) -> tuple[nn.Module, int]:
     patch_size_used = patch_size
+    if frozen_backbone:
+        kwargs: dict = {}
+        if frozen_backbone_model:
+            kwargs["model_name"] = frozen_backbone_model
+        model = FrozenBackboneClassifier(frozen_backbone, num_classes, **kwargs)
+        patch_size_used = int(model.patch_size)
+        if announce:
+            label = frozen_backbone_model or ("default " + frozen_backbone)
+            print(f"[info] Using frozen {frozen_backbone} backbone {label} with patch size {patch_size_used}")
+        return model, patch_size_used
+
     if timm_model:
         model = TimmViTWrapper(timm_model, num_classes, pretrained=timm_pretrained)
         timm_patch = resolve_patch_size(model)

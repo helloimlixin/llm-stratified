@@ -10,9 +10,9 @@ from torch.utils.data import DataLoader, TensorDataset
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-data_stub = types.ModuleType("data")
-data_stub.make_loaders = lambda *args, **kwargs: None
-sys.modules.setdefault("data", data_stub)
+datasets_stub = types.ModuleType("datasets")
+datasets_stub.create_data_loaders = lambda *args, **kwargs: None
+sys.modules.setdefault("datasets", datasets_stub)
 
 fiber_stub = types.ModuleType("fiber")
 fiber_geometry_stub = types.ModuleType("fiber.geometry")

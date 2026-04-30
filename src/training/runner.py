@@ -14,12 +14,12 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
 
-from data import make_loaders, resolve_class_names
+from datasets import create_data_loaders, get_class_names
 from models import resolve_patch_size
 from utils import seed_everything
 
 from training.backend import gather_ddp_tensor, init_backend
-from training.configs import FiberConfig
+from training.config import FiberConfig
 from training.loops import (
     evaluate,
     evaluate_accelerate,
@@ -74,6 +74,8 @@ def run_training(
     subset_test: Optional[int] = None,
     timm_model: Optional[str] = None,
     timm_pretrained: bool = True,
+    frozen_backbone: Optional[str] = None,
+    frozen_backbone_model: Optional[str] = None,
     fiber_cfg: Optional[FiberConfig] = None,
     use_ddp: bool = False,
     local_rank: int = 0,
@@ -120,7 +122,7 @@ def run_training(
         eff_bs_train, eff_bs_test = max(1, batch_size_train // world_size), max(1, batch_size_test // world_size)
 
     # Data loaders
-    train_loader, test_loader, num_classes, in_chans, final_img_size, task = make_loaders(
+    train_loader, test_loader, num_classes, in_chans, final_img_size, task = create_data_loaders(
         dataset_name,
         root,
         img_size,
@@ -135,7 +137,7 @@ def run_training(
         world_size=world_size,
     )
     base_train_loader, base_test_loader = train_loader, test_loader
-    class_names = resolve_class_names(test_loader.dataset, dataset_name) if fiber_cfg.enabled else None
+    class_names = get_class_names(test_loader.dataset, dataset_name) if fiber_cfg.enabled else None
     train_sampler = train_loader.sampler if use_ddp and not use_accelerate else None
 
     # Wandb init
@@ -196,8 +198,13 @@ def run_training(
             dropout_rate=dropout_rate,
             timm_model=timm_model,
             timm_pretrained=timm_pretrained,
+            frozen_backbone=frozen_backbone,
+            frozen_backbone_model=frozen_backbone_model,
             announce=is_main_process,
         )
+
+        if frozen_backbone and hasattr(model, "set_dataset_name"):
+            model.set_dataset_name(dataset_name)
 
         if not use_accelerate:
             model = model.to(device)
@@ -314,8 +321,8 @@ def run_training(
 
             # Fiber analysis
             if fiber_cfg.enabled and (epoch == 0 or (epoch + 1) % fiber_cfg.embed_interval == 0 or epoch == num_epochs - 1):
-                from fiber.collection import collect_patch_tokens
-                from fiber.orchestration import run_fiber_analysis_epoch
+                from fiber.analysis import analyze_fiber_epoch
+                from fiber.patch_tokens import collect_patch_tokens
 
                 if use_ddp and not use_accelerate and dist.is_initialized():
                     dist.barrier()
@@ -376,7 +383,7 @@ def run_training(
 
                     print(f"[fiber] Epoch {epoch:03d}: running analysis...", flush=True)
                     t1 = time.time()
-                    analysis = run_fiber_analysis_epoch(
+                    analysis = analyze_fiber_epoch(
                         epoch=epoch,
                         embeddings=embeddings,
                         labels=labels,
@@ -408,6 +415,16 @@ def run_training(
                         vit_token_polysemy_ablate_batches=fiber_cfg.vit_token_polysemy_ablate_batches,
                         vit_token_polysemy_min_count=fiber_cfg.vit_token_polysemy_min_count,
                         vit_token_polysemy_ablate_reps=fiber_cfg.vit_token_polysemy_ablate_reps,
+                        sparse_probe=fiber_cfg.sparse_probe,
+                        sparse_probe_radius=fiber_cfg.sparse_probe_radius,
+                        sparse_probe_auto_neighbor_k=fiber_cfg.sparse_probe_auto_neighbor_k,
+                        sparse_probe_auto_radius_quantile=fiber_cfg.sparse_probe_auto_radius_quantile,
+                        sparse_probe_min_patches=fiber_cfg.sparse_probe_min_patches,
+                        sparse_probe_max_anchors=fiber_cfg.sparse_probe_max_anchors,
+                        sparse_probe_dictionary_size=fiber_cfg.sparse_probe_dictionary_size,
+                        sparse_probe_residual_threshold=fiber_cfg.sparse_probe_residual_threshold,
+                        sparse_probe_max_sparsity=fiber_cfg.sparse_probe_max_sparsity,
+                        sparse_probe_global_dictionary=fiber_cfg.sparse_probe_global_dictionary,
                         wandb_module=wandb if wandb_on else None,
                         model=model_unwrapped,
                         device=device,
@@ -455,14 +472,14 @@ def run_training(
         # Save histories
         if fiber_cfg.enabled and is_main_process and run_dir:
             from fiber.animation import build_embedding_animation_frames, generate_embedding_animation
-            from fiber.visualization import plot_progress
+            from fiber.plots import save_training_summary_plot
 
             with open(run_dir / "train_history.json", "w") as fp:
                 json.dump(train_history, fp, indent=2)
             with open(run_dir / "fiber_history.json", "w") as fp:
                 json.dump(fiber_history, fp, indent=2)
             if final_coords_3d is not None and final_dims is not None:
-                plot_progress(
+                save_training_summary_plot(
                     train_history,
                     fiber_history,
                     final_coords_3d,

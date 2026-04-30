@@ -36,3 +36,14 @@ vit_token_polysemy_ablate: true
 vit_token_polysemy_ablate_batches: 10
 vit_token_polysemy_min_count: 50
 vit_token_polysemy_ablate_reps: 5
+
+# Sparse dictionary probe
+sparse_probe: false
+sparse_probe_radius: null
+sparse_probe_auto_neighbor_k: 32
+sparse_probe_auto_radius_quantile: 0.5
+sparse_probe_min_patches: 12
+sparse_probe_max_anchors: 64
+sparse_probe_dictionary_size: 32
+sparse_probe_residual_threshold: 0.15
+sparse_probe_max_sparsity: 16

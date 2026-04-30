@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
     matplotlib = None
     plt = None
 
-from data import make_loaders
+from datasets import create_data_loaders
 from fiber.geometry import (
     normalize_volume_range,
     run_fiber_bundle_test_from_sorted_dists,
@@ -776,7 +776,7 @@ def main() -> None:
     seed_everything(args.seed)
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
 
-    _, test_loader, num_classes, in_chans, final_img_size, _task = make_loaders(
+    _, test_loader, num_classes, in_chans, final_img_size, _task = create_data_loaders(
         args.dataset,
         args.root,
         args.img_size,

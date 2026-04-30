@@ -46,7 +46,7 @@ try:
 except Exception:
     wandb = None  # type: ignore
 
-from data import IMAGENET_MEAN, IMAGENET_STD
+from datasets import IMAGENET_MEAN, IMAGENET_STD
 from utils import denormalize_images, get_device, seed_everything as set_seed
 
 
@@ -111,7 +111,7 @@ def save_image_grid(imgs01: torch.Tensor, out_path: Path, nrow: int = 8) -> None
 
 
 @dataclass
-class PatchKMeansTokenizer:
+class PatchCodebookTokenizer:
     img_size: int
     patch_size: int
     codebook_size: int
@@ -175,9 +175,9 @@ class PatchKMeansTokenizer:
         np.save(path, payload, allow_pickle=True)
 
     @staticmethod
-    def load(path: Path) -> "PatchKMeansTokenizer":
+    def load(path: Path) -> "PatchCodebookTokenizer":
         payload = np.load(path, allow_pickle=True).item()
-        return PatchKMeansTokenizer(
+        return PatchCodebookTokenizer(
             img_size=int(payload["img_size"]),
             patch_size=int(payload["patch_size"]),
             codebook_size=int(payload["codebook_size"]),
@@ -185,7 +185,7 @@ class PatchKMeansTokenizer:
         )
 
 
-def fit_tokenizer(
+def train_patch_tokenizer(
     *,
     dataset: torch.utils.data.Dataset,
     img_size: int,
@@ -194,7 +194,7 @@ def fit_tokenizer(
     max_images: int,
     batch_size: int,
     seed: int,
-) -> PatchKMeansTokenizer:
+) -> PatchCodebookTokenizer:
     """
     Fit k-means centroids over normalized patches.
 
@@ -230,7 +230,7 @@ def fit_tokenizer(
             if max_images and seen >= max_images:
                 break
         centroids = kmeans.cluster_centers_.astype(np.float32)
-        return PatchKMeansTokenizer(
+        return PatchCodebookTokenizer(
             img_size=img_size,
             patch_size=patch_size,
             codebook_size=codebook_size,
@@ -293,7 +293,7 @@ def fit_tokenizer(
             break
 
     centroids = centroids_t.detach().cpu().numpy().astype(np.float32)
-    return PatchKMeansTokenizer(
+    return PatchCodebookTokenizer(
         img_size=img_size,
         patch_size=patch_size,
         codebook_size=codebook_size,
@@ -306,7 +306,7 @@ def fit_tokenizer(
 # -----------------------------
 
 
-class CausalSelfAttention(nn.Module):
+class MaskedSelfAttention(nn.Module):
     def __init__(self, n_embd: int, n_head: int, dropout: float):
         super().__init__()
         assert n_embd % n_head == 0
@@ -332,11 +332,11 @@ class CausalSelfAttention(nn.Module):
         return y
 
 
-class Block(nn.Module):
+class AutoregressiveTransformerBlock(nn.Module):
     def __init__(self, n_embd: int, n_head: int, mlp_ratio: float, dropout: float):
         super().__init__()
         self.ln1 = nn.LayerNorm(n_embd)
-        self.attn = CausalSelfAttention(n_embd, n_head, dropout)
+        self.attn = MaskedSelfAttention(n_embd, n_head, dropout)
         self.ln2 = nn.LayerNorm(n_embd)
         self.mlp = nn.Sequential(
             nn.Linear(n_embd, int(mlp_ratio * n_embd)),
@@ -351,7 +351,7 @@ class Block(nn.Module):
         return x
 
 
-class TokenGPT(nn.Module):
+class PatchTokenTransformer(nn.Module):
     def __init__(self, vocab: int, seq_len: int, n_embd: int, n_head: int, n_layer: int, dropout: float):
         super().__init__()
         self.vocab = vocab
@@ -359,7 +359,9 @@ class TokenGPT(nn.Module):
         self.tok_emb = nn.Embedding(vocab, n_embd)
         self.pos_emb = nn.Embedding(seq_len, n_embd)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.ModuleList([Block(n_embd, n_head, mlp_ratio=4.0, dropout=dropout) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList(
+            [AutoregressiveTransformerBlock(n_embd, n_head, mlp_ratio=4.0, dropout=dropout) for _ in range(n_layer)]
+        )
         self.ln_f = nn.LayerNorm(n_embd)
         self.head = nn.Linear(n_embd, vocab, bias=False)
 
@@ -376,8 +378,8 @@ class TokenGPT(nn.Module):
 
 
 @torch.no_grad()
-def sample_gpt(
-    model: TokenGPT,
+def sample_patch_token_model(
+    model: PatchTokenTransformer,
     *,
     bos_seq: torch.Tensor,
     steps: int,
@@ -418,10 +420,10 @@ def label_entropy(labels: np.ndarray, num_classes: int) -> float:
     return float(-(p * np.log(p)).sum())
 
 
-def run_polysemy_probe(
+def run_token_polysemy_probe(
     *,
-    tokenizer: PatchKMeansTokenizer,
-    model: TokenGPT,
+    tokenizer: PatchCodebookTokenizer,
+    model: PatchTokenTransformer,
     dataset: torch.utils.data.Dataset,
     num_classes: int,
     outdir: Path,
@@ -470,7 +472,7 @@ def run_polysemy_probe(
     # Forced-token generation
     device = next(model.parameters()).device
     bos = torch.zeros(gen_samples, tokenizer.seq_len, dtype=torch.long, device=device)
-    forced = sample_gpt(
+    forced = sample_patch_token_model(
         model,
         bos_seq=bos,
         steps=tokenizer.seq_len,
@@ -557,9 +559,9 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def train_gpt(
+def train_patch_token_model(
     *,
-    tokenizer: PatchKMeansTokenizer,
+    tokenizer: PatchCodebookTokenizer,
     train_ds: torch.utils.data.Dataset,
     test_ds: torch.utils.data.Dataset,
     num_classes: int,
@@ -580,7 +582,7 @@ def train_gpt(
     set_seed(seed)
     outdir.mkdir(parents=True, exist_ok=True)
     device = get_device()
-    model = TokenGPT(
+    model = PatchTokenTransformer(
         vocab=tokenizer.codebook_size,
         seq_len=tokenizer.seq_len,
         n_embd=n_embd,
@@ -658,7 +660,13 @@ def train_gpt(
         if (epoch % max(1, save_every) == 0) or (epoch == epochs - 1):
             with torch.no_grad():
                 bos = torch.zeros(16, tokenizer.seq_len, dtype=torch.long, device=device)
-                samp = sample_gpt(model, bos_seq=bos, steps=tokenizer.seq_len, temperature=1.0, top_k=64).cpu()
+                samp = sample_patch_token_model(
+                    model,
+                    bos_seq=bos,
+                    steps=tokenizer.seq_len,
+                    temperature=1.0,
+                    top_k=64,
+                ).cpu()
                 imgs01 = tokenizer.decode_tokens(samp)
                 sample_path = outdir / f"samples_epoch_{epoch:03d}.png"
                 save_image_grid(imgs01, sample_path, nrow=8)
@@ -676,7 +684,7 @@ def main() -> None:
     train_ds, test_ds, num_classes = make_dataset(args.dataset, args.root, args.img_size)
 
     if args.cmd == "fit-tokenizer":
-        tok = fit_tokenizer(
+        tok = train_patch_tokenizer(
             dataset=train_ds,
             img_size=args.img_size,
             patch_size=args.patch_size,
@@ -694,13 +702,13 @@ def main() -> None:
         raise RuntimeError(
             f"Tokenizer not found at {tok_path}. Run: python src/imagegpt.py fit-tokenizer ..."
         )
-    tok = PatchKMeansTokenizer.load(tok_path)
+    tok = PatchCodebookTokenizer.load(tok_path)
 
     if args.cmd == "train-gpt":
         # keep a copy of tokenizer with the run
         outdir.mkdir(parents=True, exist_ok=True)
         tok.save(outdir / "tokenizer.npy")
-        train_gpt(
+        train_patch_token_model(
             tokenizer=tok,
             train_ds=train_ds,
             test_ds=test_ds,
@@ -724,7 +732,7 @@ def main() -> None:
     if args.cmd == "probe-polysemy":
         ckpt = torch.load(args.ckpt, map_location="cpu")
         cfg = ckpt["cfg"]
-        model = TokenGPT(
+        model = PatchTokenTransformer(
             vocab=int(cfg["vocab"]),
             seq_len=int(cfg["seq_len"]),
             n_embd=int(cfg["n_embd"]),
@@ -745,7 +753,7 @@ def main() -> None:
         if force_pos < 0:
             force_pos = tok.seq_len // 2
 
-        run_polysemy_probe(
+        run_token_polysemy_probe(
             tokenizer=tok,
             model=model,
             dataset=test_ds,
@@ -767,3 +775,13 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+PatchKMeansTokenizer = PatchCodebookTokenizer
+fit_tokenizer = train_patch_tokenizer
+CausalSelfAttention = MaskedSelfAttention
+Block = AutoregressiveTransformerBlock
+TokenGPT = PatchTokenTransformer
+sample_gpt = sample_patch_token_model
+run_polysemy_probe = run_token_polysemy_probe
+train_gpt = train_patch_token_model

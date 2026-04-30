@@ -20,11 +20,11 @@ try:
 except ImportError:  # pragma: no cover
     tqdm = None
 
-from data import make_loaders, resolve_class_names
+from datasets import create_data_loaders, get_class_names
 from fiber.animation import build_embedding_animation_frames, generate_embedding_animation
-from fiber.orchestration import run_fiber_analysis_epoch
+from fiber.analysis import analyze_fiber_epoch
 from models import SamBackboneWrapper
-from training.configs import SamFiberConfig
+from training.config import SamFiberConfig
 from training.wandb_utils import finish_wandb_run, init_wandb_run
 from utils import seed_everything, to_serializable
 
@@ -515,7 +515,7 @@ def run_sam_fiber_job(
     seed_everything(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    _train_loader, test_loader, num_classes, _in_chans, final_img_size, _task = make_loaders(
+    _train_loader, test_loader, num_classes, _in_chans, final_img_size, _task = create_data_loaders(
         dataset_name,
         root,
         img_size,
@@ -535,7 +535,7 @@ def run_sam_fiber_job(
         total_eval_images,
         int(subset_test) if subset_test is not None and int(subset_test) > 0 else total_eval_images,
     )
-    class_names = resolve_class_names(full_test_dataset, dataset_name)
+    class_names = get_class_names(full_test_dataset, dataset_name)
     model = SamBackboneWrapper(model_name=sam_cfg.model_name).to(device)
 
     config = {
@@ -637,7 +637,7 @@ def run_sam_fiber_job(
                 }
             )
             print(f"[sam_fiber] Epoch {epoch:03d}: running fiber analysis...", flush=True)
-            analysis = run_fiber_analysis_epoch(
+            analysis = analyze_fiber_epoch(
                 epoch=epoch,
                 embeddings=embeddings,
                 labels=labels,

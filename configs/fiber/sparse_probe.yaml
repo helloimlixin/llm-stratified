@@ -1,8 +1,8 @@
-# Full ViT token polysemy analysis (recommended preset)
+# Fiber analysis with sparse dictionary verification enabled.
 enabled: true
 embed_interval: 10
-max_tokens: 2048
-embed_full_val: true
+max_tokens: 1024
+embed_full_val: false
 embedding_animation: true
 embedding_animation_fps: 4
 
@@ -13,12 +13,11 @@ alpha: 0.005
 nstrat: 3
 neighborhood_size: null
 
-polysemy: true
+polysemy: false
 polysemy_k: 48
 polysemy_anchors: 12
 polysemy_grid_cols: 8
-
-polysemy_invert: true
+polysemy_invert: false
 polysemy_invert_steps: 200
 polysemy_invert_restarts: 6
 polysemy_invert_lr: 0.08
@@ -28,17 +27,15 @@ polysemy_invert_patch_only: true
 polysemy_invert_blur_every: 10
 polysemy_invert_blur_sigma: 0.8
 
-# Enable ViT token polysemy with robust settings
-vit_token_polysemy: true
-vit_token_polysemy_k: 64
+vit_token_polysemy: false
+vit_token_polysemy_k: 256
 vit_token_polysemy_topk: 16
 vit_token_polysemy_ablate: true
-vit_token_polysemy_ablate_batches: 50
-vit_token_polysemy_min_count: 100
-vit_token_polysemy_ablate_reps: 10
+vit_token_polysemy_ablate_batches: 10
+vit_token_polysemy_min_count: 50
+vit_token_polysemy_ablate_reps: 5
 
-# Sparse dictionary probe
-sparse_probe: false
+sparse_probe: true
 sparse_probe_radius: null
 sparse_probe_auto_neighbor_k: 32
 sparse_probe_auto_radius_quantile: 0.5
@@ -47,3 +44,4 @@ sparse_probe_max_anchors: 64
 sparse_probe_dictionary_size: 32
 sparse_probe_residual_threshold: 0.15
 sparse_probe_max_sparsity: 16
+sparse_probe_global_dictionary: false

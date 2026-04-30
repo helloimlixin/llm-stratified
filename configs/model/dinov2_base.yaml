@@ -1,0 +1,16 @@
+# Frozen DINOv2 backbone + trainable linear head
+name: dinov2_base
+
+frozen_backbone: dinov2
+frozen_backbone_model: facebook/dinov2-base
+
+timm_model: null
+timm_pretrained: false
+
+patch_size: 14
+embed_dim: 768
+depth: 12
+num_heads: 12
+mlp_ratio: 4.0
+dropout: 0.0
+compile: false

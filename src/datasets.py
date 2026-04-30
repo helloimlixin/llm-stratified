@@ -1,4 +1,4 @@
-"""Dataset and dataloader utilities for TinyViT training."""
+"""Dataset definitions and data-loader helpers."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, Subset
 import torch.distributed as dist
@@ -16,14 +17,14 @@ import torchvision.transforms as T
 from PIL import Image, UnidentifiedImageError
 
 __all__ = [
-    "FlatImageDataset",
-    "COCO2017MultiLabel",
-    "VOCMultiLabel",
-    "WithIndex",
-    "build_dataset",
-    "get_norm_stats",
-    "make_loaders",
-    "resolve_class_names",
+    "Coco2017MultilabelDataset",
+    "FlatDirectoryImageDataset",
+    "IndexedDataset",
+    "VocMultilabelDataset",
+    "create_data_loaders",
+    "create_dataset_pair",
+    "get_class_names",
+    "get_dataset_normalization",
 ]
 
 # Normalization constants as tuples (for torchvision transforms)
@@ -37,6 +38,7 @@ DEFAULT_IMG_SIZES = {
     "CIFAR10": 32, "CIFAR100": 32, "STL10": 96, "FOOD101": 224, "FLOWERS102": 224,
     "CELEBA": 64, "CELEBAHQ": 256, "SVHN": 32, "IMAGENET": 256, "FFHQ": 256,
     "VOC": 224, "VOC2007": 224, "VOC2012": 224, "COCO": 224, "COCO2017": 224,
+    "DTD": 224, "CLEVR": 224, "EUROSAT": 64,
     "FAKEDATA": 32,
 }
 
@@ -55,7 +57,7 @@ VOC_CLASSES = [
 ]
 
 
-def get_norm_stats(dataset: str, device: torch.device | None = None, as_tensor: bool = True):
+def get_dataset_normalization(dataset: str, device: torch.device | None = None, as_tensor: bool = True):
     """Get normalization mean/std for a dataset.
 
     Args:
@@ -94,7 +96,7 @@ MANUAL_NO_DOWNLOAD_DATASETS = {
 }
 
 
-def _make_transforms(norm_mean, norm_std, img_size: int, crop_pad: int = 4, heavy: bool = False):
+def _build_transforms(norm_mean, norm_std, img_size: int, crop_pad: int = 4, heavy: bool = False):
     """Create train and test transforms."""
     train_tf = [
         T.RandomResizedCrop(img_size, scale=(0.8, 1.0)) if heavy else T.RandomCrop(img_size, padding=crop_pad),
@@ -128,7 +130,7 @@ def _resolve_coco2017_paths(root_dir: str) -> tuple[Path, Path, Path, Path, Path
     )
 
 
-class COCO2017MultiLabel(Dataset):
+class Coco2017MultilabelDataset(Dataset):
     """COCO instances -> multi-hot category vector for image-level classification."""
 
     def __init__(self, *, img_dir: Path, ann_file: Path, transform=None, classes=None, cat_id_to_idx=None):
@@ -236,7 +238,7 @@ class COCO2017MultiLabel(Dataset):
         return x, y, resolved_idx
 
 
-class VOCMultiLabel(Dataset):
+class VocMultilabelDataset(Dataset):
     """VOC detection -> multi-hot class vector."""
 
     def __init__(self, base: Dataset):
@@ -262,7 +264,48 @@ class VOCMultiLabel(Dataset):
         return img, y
 
 
-class FlatImageDataset(Dataset):
+class PackedNumpyImageDataset(Dataset):
+    """Image dataset for a packed ``.npy`` of shape (N, H, W, C) with uint8 data."""
+
+    def __init__(self, npy_path: str, transform=None, *, split: str = "train", val_fraction: float = 0.1):
+        self.npy_path = Path(npy_path)
+        self.transform = transform
+        self.split = str(split).lower()
+        self.val_fraction = float(val_fraction)
+        self.array = np.load(self.npy_path, mmap_mode="r")
+        n = int(self.array.shape[0])
+        val_count = max(1, int(round(n * self.val_fraction)))
+        val_count = min(val_count, max(1, n - 1))
+        split_idx = n - val_count
+        if self.split in {"train", "trainval"}:
+            self.indices = list(range(0, split_idx))
+        elif self.split in {"val", "valid", "validation", "test"}:
+            self.indices = list(range(split_idx, n))
+        else:
+            raise ValueError(f"Unsupported split for PackedNumpyImageDataset: {split}")
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int):
+        arr = np.asarray(self.array[self.indices[idx]])
+        img = Image.fromarray(arr.astype(np.uint8), mode="RGB")
+        x = self.transform(img) if self.transform else img
+        return x, 0
+
+
+def _find_packed_npy(root: str) -> Optional[str]:
+    p = Path(root)
+    if p.is_file() and p.suffix == ".npy":
+        return str(p)
+    if p.is_dir():
+        candidates = sorted(p.glob("*.npy"))
+        if candidates:
+            return str(candidates[0])
+    return None
+
+
+class FlatDirectoryImageDataset(Dataset):
     """Image dataset for a flat directory of images, with a deterministic split."""
 
     def __init__(self, root: str, transform=None, *, split: str = "train", val_fraction: float = 0.1):
@@ -283,7 +326,7 @@ class FlatImageDataset(Dataset):
         elif self.split in {"val", "valid", "validation", "test"}:
             self.files = files[split_idx:]
         else:
-            raise ValueError(f"Unsupported split for FlatImageDataset: {split}")
+            raise ValueError(f"Unsupported split for FlatDirectoryImageDataset: {split}")
 
     def __len__(self) -> int:
         return len(self.files)
@@ -294,11 +337,11 @@ class FlatImageDataset(Dataset):
         return x, 0
 
 
-def build_dataset(
+def create_dataset_pair(
     name: str = "CIFAR10",
     root: str = "./data",
     img_size: Optional[int] = None,
-    split_celebA: str = "train",
+    celeba_split: str = "train",
     download: bool = True,
 ) -> Tuple[Dataset, Dataset, int, int, int, str]:
     """Construct a torchvision dataset pair plus metadata."""
@@ -306,37 +349,61 @@ def build_dataset(
     img_size = img_size or DEFAULT_IMG_SIZES.get(name, 32)
 
     if name == "CIFAR10":
-        train_tf, test_tf = _make_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
+        train_tf, test_tf = _build_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
         train_ds = torchvision.datasets.CIFAR10(root=root, train=True, download=download, transform=train_tf)
         test_ds = torchvision.datasets.CIFAR10(root=root, train=False, download=download, transform=test_tf)
         return train_ds, test_ds, 10, 3, img_size, "multiclass"
 
     if name == "CIFAR100":
-        train_tf, test_tf = _make_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
+        train_tf, test_tf = _build_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
         train_ds = torchvision.datasets.CIFAR100(root=root, train=True, download=download, transform=train_tf)
         test_ds = torchvision.datasets.CIFAR100(root=root, train=False, download=download, transform=test_tf)
         return train_ds, test_ds, 100, 3, img_size, "multiclass"
 
     if name == "STL10":
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=8, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=8, heavy=True)
         train_ds = torchvision.datasets.STL10(root=root, split="train", download=download, transform=train_tf)
         test_ds = torchvision.datasets.STL10(root=root, split="test", download=download, transform=test_tf)
         return train_ds, test_ds, 10, 3, img_size, "multiclass"
 
     if name == "FOOD101":
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
         train_ds = torchvision.datasets.Food101(root=root, split="train", download=download, transform=train_tf)
         test_ds = torchvision.datasets.Food101(root=root, split="test", download=download, transform=test_tf)
         return train_ds, test_ds, 101, 3, img_size, "multiclass"
 
     if name == "FLOWERS102":
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
         train_ds = torchvision.datasets.Flowers102(root=root, split="train", download=download, transform=train_tf)
         test_ds = torchvision.datasets.Flowers102(root=root, split="test", download=download, transform=test_tf)
         return train_ds, test_ds, 102, 3, img_size, "multiclass"
 
+    if name == "DTD":
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_ds = torchvision.datasets.DTD(root=root, split="train", download=download, transform=train_tf)
+        test_ds = torchvision.datasets.DTD(root=root, split="test", download=download, transform=test_tf)
+        return train_ds, test_ds, 47, 3, img_size, "multiclass"
+
+    if name == "CLEVR":
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=False)
+        train_ds = torchvision.datasets.CLEVRClassification(root=root, split="train", download=download, transform=train_tf)
+        test_ds = torchvision.datasets.CLEVRClassification(root=root, split="val", download=download, transform=test_tf)
+        return train_ds, test_ds, 8, 3, img_size, "multiclass"
+
+    if name == "EUROSAT":
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, heavy=True)
+        full_ds = torchvision.datasets.EuroSAT(root=root, download=download, transform=train_tf)
+        n = len(full_ds)
+        val_count = max(1, int(round(n * 0.1)))
+        train_indices = list(range(0, n - val_count))
+        test_indices = list(range(n - val_count, n))
+        train_ds = Subset(full_ds, train_indices)
+        eval_full = torchvision.datasets.EuroSAT(root=root, download=False, transform=test_tf)
+        test_ds = Subset(eval_full, test_indices)
+        return train_ds, test_ds, 10, 3, img_size, "multiclass"
+
     if name == "SVHN":
-        train_tf, test_tf = _make_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
+        train_tf, test_tf = _build_transforms(CIFAR_MEAN, CIFAR_STD, img_size)
         train_ds = torchvision.datasets.SVHN(root=root, split="train", download=download, transform=train_tf)
         test_ds = torchvision.datasets.SVHN(root=root, split="test", download=download, transform=test_tf)
         return train_ds, test_ds, 10, 3, img_size, "multiclass"
@@ -405,12 +472,17 @@ def build_dataset(
                 T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
             ]
         )
-        train_ds = FlatImageDataset(root=root, split="train", transform=train_tf)
-        test_ds = FlatImageDataset(root=root, split="test", transform=test_tf)
+        packed = _find_packed_npy(root)
+        if packed:
+            train_ds = PackedNumpyImageDataset(npy_path=packed, split="train", transform=train_tf)
+            test_ds = PackedNumpyImageDataset(npy_path=packed, split="test", transform=test_tf)
+        else:
+            train_ds = FlatDirectoryImageDataset(root=root, split="train", transform=train_tf)
+            test_ds = FlatDirectoryImageDataset(root=root, split="test", transform=test_tf)
         return train_ds, test_ds, 1, 3, img_size, "multiclass"
 
     if name in {"FAKEDATA", "FAKE"}:
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size)
         train_ds = torchvision.datasets.FakeData(
             size=128,
             image_size=(3, img_size, img_size),
@@ -439,16 +511,16 @@ def build_dataset(
             return T.Compose(ops + [T.ToTensor(), T.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
         train_ds = torchvision.datasets.CelebA(
-            root=root, split=split_celebA, download=download, transform=celebA_transforms(True)
+            root=root, split=celeba_split, download=download, transform=celebA_transforms(True)
         )
         test_ds = torchvision.datasets.CelebA(root=root, split="test", download=download, transform=celebA_transforms(False))
         return train_ds, test_ds, 40, 3, img_size, "multilabel"
 
     if name in {"COCO", "COCO2017"}:
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
         _, train_img, val_img, ann_train, ann_val = _resolve_coco2017_paths(root)
-        train_ds = COCO2017MultiLabel(img_dir=train_img, ann_file=ann_train, transform=train_tf)
-        test_ds = COCO2017MultiLabel(
+        train_ds = Coco2017MultilabelDataset(img_dir=train_img, ann_file=ann_train, transform=train_tf)
+        test_ds = Coco2017MultilabelDataset(
             img_dir=val_img,
             ann_file=ann_val,
             transform=test_tf,
@@ -458,7 +530,7 @@ def build_dataset(
         return train_ds, test_ds, len(train_ds.classes), 3, img_size, "multilabel"
 
     if name in {"VOC", "VOC2007", "PASCALVOC", "VOC07"}:
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
         if not _voc_root_ok(root, "2007"):
             raise RuntimeError(
                 f"Pascal VOC 2007 not found. Expected: {root}/VOCdevkit/VOC2007/{{JPEGImages,Annotations}}/"
@@ -469,10 +541,10 @@ def build_dataset(
         base_test = torchvision.datasets.VOCDetection(
             root=root, year="2007", image_set="test", download=False, transform=test_tf
         )
-        return VOCMultiLabel(base_train), VOCMultiLabel(base_test), 20, 3, img_size, "multilabel"
+        return VocMultilabelDataset(base_train), VocMultilabelDataset(base_test), 20, 3, img_size, "multilabel"
 
     if name in {"VOC2012", "VOC12"}:
-        train_tf, test_tf = _make_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
+        train_tf, test_tf = _build_transforms(IMAGENET_MEAN, IMAGENET_STD, img_size, crop_pad=16, heavy=True)
         if not _voc_root_ok(root, "2012"):
             raise RuntimeError(
                 f"Pascal VOC 2012 not found. Expected: {root}/VOCdevkit/VOC2012/{{JPEGImages,Annotations}}/"
@@ -483,12 +555,12 @@ def build_dataset(
         base_test = torchvision.datasets.VOCDetection(
             root=root, year="2012", image_set="val", download=False, transform=test_tf
         )
-        return VOCMultiLabel(base_train), VOCMultiLabel(base_test), 20, 3, img_size, "multilabel"
+        return VocMultilabelDataset(base_train), VocMultilabelDataset(base_test), 20, 3, img_size, "multilabel"
 
     raise ValueError(f"Unknown dataset: {name}")
 
 
-def resolve_class_names(dataset: Dataset, dataset_name: str) -> Optional[List[str]]:
+def get_class_names(dataset: Dataset, dataset_name: str) -> Optional[List[str]]:
     name = dataset_name.upper()
     if name == "CELEBA" and hasattr(dataset, "attr_names"):
         try:
@@ -502,11 +574,11 @@ def resolve_class_names(dataset: Dataset, dataset_name: str) -> Optional[List[st
     if hasattr(dataset, "classes"):
         return dataset.classes
     if hasattr(dataset, "dataset"):
-        return resolve_class_names(dataset.dataset, name)
+        return get_class_names(dataset.dataset, name)
     return None
 
 
-class WithIndex(Dataset):
+class IndexedDataset(Dataset):
     """Dataset wrapper that appends a stable base-dataset index as the 3rd return value."""
 
     def __init__(self, base: Dataset):
@@ -530,7 +602,7 @@ class WithIndex(Dataset):
         return getattr(self.dataset, name)
 
 
-def make_loaders(
+def create_data_loaders(
     dataset_name: str = "CIFAR10",
     root: str = "./data",
     img_size: Optional[int] = None,
@@ -558,22 +630,22 @@ def make_loaders(
 
     if distributed and dist.is_available() and dist.is_initialized():
         if name_u in MANUAL_NO_DOWNLOAD_DATASETS:
-            train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(
+            train_ds, test_ds, num_classes, in_chans, img_size, task = create_dataset_pair(
                 dataset_name, root, img_size, download=False
             )
         else:
             if rank == 0:
-                train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(
+                train_ds, test_ds, num_classes, in_chans, img_size, task = create_dataset_pair(
                     dataset_name, root, img_size, download=True
                 )
             _barrier()
             if rank != 0:
-                train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(
+                train_ds, test_ds, num_classes, in_chans, img_size, task = create_dataset_pair(
                     dataset_name, root, img_size, download=False
                 )
             _barrier()
     else:
-        train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset(
+        train_ds, test_ds, num_classes, in_chans, img_size, task = create_dataset_pair(
             dataset_name, root, img_size, download=True
         )
 
@@ -583,7 +655,7 @@ def make_loaders(
         test_ds = Subset(test_ds, list(range(min(subset_test, len(test_ds)))))
 
     if name_u in {"COCO", "COCO2017"}:
-        train_ds, test_ds = WithIndex(train_ds), WithIndex(test_ds)
+        train_ds, test_ds = IndexedDataset(train_ds), IndexedDataset(test_ds)
 
     pin = device is not None and device.type == "cuda"
     persistent_workers = num_workers > 0
@@ -623,3 +695,13 @@ def make_loaders(
         persistent_workers=persistent_workers,
     )
     return train_loader, test_loader, num_classes, in_chans, img_size, task
+
+
+COCO2017MultiLabel = Coco2017MultilabelDataset
+VOCMultiLabel = VocMultilabelDataset
+FlatImageDataset = FlatDirectoryImageDataset
+WithIndex = IndexedDataset
+build_dataset = create_dataset_pair
+get_norm_stats = get_dataset_normalization
+make_loaders = create_data_loaders
+resolve_class_names = get_class_names

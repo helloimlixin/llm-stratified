@@ -1,4 +1,4 @@
-"""Main orchestration: run_fiber_analysis_epoch."""
+"""Main orchestration for per-epoch fiber analysis."""
 
 from __future__ import annotations
 
@@ -13,29 +13,28 @@ from torch.utils.data import DataLoader, DistributedSampler, Subset
 
 from utils import to_serializable
 
-from fiber.geometry import (
-    run_fiber_bundle_test,
-    summarize_stratifications,
-)
+from fiber.geometry import analyze_stratification, summarize_stratification
 from fiber.hypothesis import (
-    compute_class_dim_means,
-    compute_neighborhood_dimensions,
-    compute_stratified_manifold_hypothesis_metrics,
-    format_hypothesis_log_line,
+    estimate_neighborhood_dimensions,
+    format_hypothesis_summary_line,
+    summarize_class_dimensions,
+    summarize_hypothesis_metrics,
 )
-from fiber.visualization import (
+from fiber.sparse_probe import run_sparse_dictionary_probe
+from fiber.plots import (
     HAS_MATPLOTLIB,
     _maybe_wandb_metric_table,
     _singular_token_mask,
     _wandb_image_or_none,
     add_heatmap_patch,
-    make_embedding_figure_3d,
-    make_embedding_figure_tsne,
-    plot_progress,
-    project_embeddings_3d,
-    select_irregular_images,
-    select_singular_token_indices,
-    tsne_embeddings_3d,
+    build_embedding_scatter_figure,
+    build_tsne_embedding_figure,
+    project_embeddings_pca_3d,
+    project_embeddings_tsne_3d,
+    select_irregular_tokens,
+    select_singular_tokens,
+    save_polysemy_entropy_scatter_plot,
+    save_polysemy_irregularity_plot,
     _require_matplotlib,
 )
 from fiber.polysemy import (
@@ -51,17 +50,13 @@ from fiber.polysemy import (
     make_polysemy_gallery,
     select_polysemy_entropy_images,
 )
-from fiber.visualization import (
-    make_polysemy_entropy_scatter,
-    make_polysemy_irregularity_plot,
-)
 from fiber.ablation import (
     _eval_ablation_controls,
     compute_masked_classification_effects,
 )
 
 
-def run_fiber_analysis_epoch(
+def analyze_fiber_epoch(
     *,
     epoch: int,
     embeddings: torch.Tensor,
@@ -94,6 +89,16 @@ def run_fiber_analysis_epoch(
     vit_token_polysemy_ablate_batches: int = 10,
     vit_token_polysemy_min_count: int = 50,
     vit_token_polysemy_ablate_reps: int = 5,
+    sparse_probe: bool = False,
+    sparse_probe_radius: float | None = None,
+    sparse_probe_auto_neighbor_k: int = 32,
+    sparse_probe_auto_radius_quantile: float = 0.5,
+    sparse_probe_min_patches: int = 12,
+    sparse_probe_max_anchors: int = 64,
+    sparse_probe_dictionary_size: int = 32,
+    sparse_probe_residual_threshold: float = 0.15,
+    sparse_probe_max_sparsity: int = 16,
+    sparse_probe_global_dictionary: bool = False,
     wandb_module=None,
     model: torch.nn.Module | None = None,
     device: torch.device | None = None,
@@ -120,10 +125,10 @@ def run_fiber_analysis_epoch(
         embed_dir / f"epoch_{epoch:03d}.pt",
     )
 
-    fiber_results, _sorted_dists, unsorted_dists = run_fiber_bundle_test(
+    fiber_results, _sorted_dists, unsorted_dists = analyze_stratification(
         embeddings, vol_min=vol_min, vol_max=vol_max, ws=ws, alpha=alpha, nstrat=nstrat
     )
-    neighborhood_dims = compute_neighborhood_dimensions(fiber_results, bboxes, neighborhood_size)
+    neighborhood_dims = estimate_neighborhood_dimensions(fiber_results, bboxes, neighborhood_size)
 
     # Extract first-stratum dimensions once — reused throughout
     final_dims = np.array(
@@ -142,8 +147,8 @@ def run_fiber_analysis_epoch(
     for k in mean_dim_by_image:
         mean_dim_by_image[k] /= max(1, count_by_image[k])
 
-    fiber_summary = summarize_stratifications(fiber_results, alpha=alpha)
-    class_dim_means, class_dim_counts = compute_class_dim_means(fiber_results, labels, num_classes)
+    fiber_summary = summarize_stratification(fiber_results, alpha=alpha)
+    class_dim_means, class_dim_counts = summarize_class_dimensions(fiber_results, labels, num_classes)
     fiber_summary.update({
         "class_dim_means": class_dim_means,
         "class_dim_counts": class_dim_counts,
@@ -156,8 +161,8 @@ def run_fiber_analysis_epoch(
         "epoch": epoch,
     })
 
-    # Reuse the unsorted distance matrix from run_fiber_bundle_test
-    hypothesis_summary = compute_stratified_manifold_hypothesis_metrics(
+    # Reuse the unsorted distance matrix from the main geometry analysis.
+    hypothesis_summary = summarize_hypothesis_metrics(
         embeddings=embeddings,
         fiber_results=fiber_results,
         image_ids=image_ids,
@@ -168,23 +173,76 @@ def run_fiber_analysis_epoch(
         precomputed_dists=unsorted_dists,
     )
     fiber_summary.update(hypothesis_summary)
-    del unsorted_dists  # free O(N^2) memory
 
     hypothesis_path = analysis_dir / f"epoch_{epoch:03d}_hypothesis_summary.json"
     with open(hypothesis_path, "w") as fp:
         json.dump(to_serializable(hypothesis_summary), fp, indent=2)
-    print(format_hypothesis_log_line(epoch=epoch, metrics=hypothesis_summary), flush=True)
+    print(format_hypothesis_summary_line(epoch=epoch, metrics=hypothesis_summary), flush=True)
     narrative = hypothesis_summary.get("hypothesis_narrative")
     if narrative:
         print(f"[hypothesis] {narrative}", flush=True)
 
+    sparse_probe_result = None
+    if sparse_probe:
+        try:
+            sparse_probe_result = run_sparse_dictionary_probe(
+                epoch=epoch,
+                embeddings=embeddings,
+                images=images,
+                image_ids=image_ids,
+                bboxes=bboxes,
+                fiber_results=fiber_results,
+                dists=unsorted_dists,
+                out_dir=analysis_dir,
+                patch_size=patch_size,
+                radius=sparse_probe_radius,
+                auto_neighbor_k=sparse_probe_auto_neighbor_k,
+                auto_radius_quantile=sparse_probe_auto_radius_quantile,
+                min_patches=sparse_probe_min_patches,
+                max_anchors=sparse_probe_max_anchors,
+                dictionary_size=sparse_probe_dictionary_size,
+                residual_threshold=sparse_probe_residual_threshold,
+                max_sparsity=sparse_probe_max_sparsity,
+                global_dictionary=sparse_probe_global_dictionary,
+            )
+            sparse_summary = sparse_probe_result.get("summary", {}) if sparse_probe_result else {}
+            for key in (
+                "radius",
+                "evaluated_anchors",
+                "mean_patch_count",
+                "mean_required_sparsity",
+                "median_required_sparsity",
+                "sparsity_std",
+                "sparsity_range",
+                "sparsity_total_variation",
+                "corr_sparsity_patch_count",
+                "corr_sparsity_dimension",
+                "corr_sparsity_irregularity",
+            ):
+                if key in sparse_summary:
+                    fiber_summary[f"sparse_probe_{key}"] = sparse_summary[key]
+            dict_mode = sparse_summary.get("dictionary_mode", "local")
+            print(
+                "[sparse_probe] "
+                f"anchors={sparse_summary.get('evaluated_anchors', 0)} "
+                f"eps={float(sparse_summary.get('radius', float('nan'))):.4g} "
+                f"mean_sparsity={float(sparse_summary.get('mean_required_sparsity', float('nan'))):.3g} "
+                f"range={float(sparse_summary.get('sparsity_range', float('nan'))):.3g}"
+                f"{' [global dict]' if dict_mode == 'global' else ''}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[sparse_probe] failed: {e}", flush=True)
+
+    del unsorted_dists  # free O(N^2) memory
+
     with open(base_dir / f"fiber_epoch_{epoch:03d}.json", "w") as fp:
         json.dump(to_serializable(fiber_results), fp, indent=2)
 
-    final_coords_3d = project_embeddings_3d(embeddings)
+    final_coords_3d = project_embeddings_pca_3d(embeddings)
     final_tsne_3d, tsne_idx = None, None
     try:
-        result = tsne_embeddings_3d(embeddings)
+        result = project_embeddings_tsne_3d(embeddings)
         if result:
             final_tsne_3d, tsne_idx = result
     except Exception as e:
@@ -201,15 +259,22 @@ def run_fiber_analysis_epoch(
                 else np.array([], dtype=np.int64)
             )
             singular_mask = _singular_token_mask(fiber_results, alpha)
-            anchors = select_singular_token_indices(
+            anchors = select_singular_tokens(
                 fiber_results=fiber_results, alpha=alpha, top_k=polysemy_anchors
             )
             if not anchors:
                 anchors = [
                     item["token_id"]
-                    for item in select_irregular_images(
-                        images, image_ids, labels, fiber_results, dataset, bboxes,
-                        neighborhood_dims, class_names, mean_dim_by_image,
+                    for item in select_irregular_tokens(
+                        images=images,
+                        image_ids=image_ids,
+                        labels=labels,
+                        fiber_results=fiber_results,
+                        dataset=dataset,
+                        bboxes=bboxes,
+                        neighborhood_dims=neighborhood_dims,
+                        class_names=class_names,
+                        image_mean_dims=mean_dim_by_image,
                         pred_labels=pred_labels, top_k=polysemy_anchors,
                     )
                 ]
@@ -236,14 +301,14 @@ def run_fiber_analysis_epoch(
             )
             if top_entropy_sets:
                 polysemy_result["top_entropy_sets"] = top_entropy_sets
-            make_polysemy_entropy_scatter(
+            save_polysemy_entropy_scatter_plot(
                 polysemy_result, out_dir=analysis_dir, prefix=f"epoch_{epoch:03d}",
                 annotate_top=min(polysemy_anchors, 6),
             )
             ent_scores, top_shares, top_labels = compute_token_polysemy_entropy_scores(
                 embeddings=embeddings, labels=labels, num_classes=num_classes, k=polysemy_k,
             )
-            irreg_path, irreg_stats = make_polysemy_irregularity_plot(
+            irreg_path, irreg_stats = save_polysemy_irregularity_plot(
                 entropies=ent_scores, fiber_results=fiber_results, out_dir=analysis_dir,
                 prefix=f"epoch_{epoch:03d}", alpha=alpha,
             )
@@ -390,13 +455,28 @@ def run_fiber_analysis_epoch(
         if metric_table is not None:
             log_dict["hypothesis/summary_table"] = metric_table
 
+        if sparse_probe_result:
+            sparse_summary = sparse_probe_result.get("summary", {})
+            for key, value in sparse_summary.items():
+                if isinstance(value, str):
+                    log_dict[f"sparse_probe/{key}"] = value
+                elif isinstance(value, (int, float, np.integer, np.floating)):
+                    value_f = float(value)
+                    log_dict[f"sparse_probe/{key}"] = value_f if math.isfinite(value_f) else np.nan
+            sparse_plot = sparse_summary.get("plot_path")
+            if sparse_plot:
+                try:
+                    log_dict["sparse_probe/summary_plot"] = wandb_module.Image(str(sparse_plot))
+                except Exception as e:
+                    print(f"[wandb] skipped sparse_probe plot: {e}")
+
         pca_image = _wandb_image_or_none(
             wandb_module=wandb_module, key="embeddings/pca_3d",
             build_fn=lambda: (
                 (lambda fig: (
                     wandb_module.Image(fig, caption=f"Epoch {epoch}"),
                     _require_matplotlib().close(fig),
-                )[0])(make_embedding_figure_3d(final_coords_3d, final_dims))
+                )[0])(build_embedding_scatter_figure(final_coords_3d, final_dims))
             ),
         )
         if pca_image is not None:
@@ -409,7 +489,7 @@ def run_fiber_analysis_epoch(
                     (lambda fig: (
                         wandb_module.Image(fig, caption=f"Epoch {epoch}"),
                         _require_matplotlib().close(fig),
-                    )[0])(make_embedding_figure_tsne(
+                    )[0])(build_tsne_embedding_figure(
                         final_tsne_3d,
                         final_dims[tsne_idx] if tsne_idx is not None else final_dims,
                     ))
@@ -504,10 +584,18 @@ def run_fiber_analysis_epoch(
                     if isinstance(k, str) and k.startswith("vit_polysemy/")
                 })
 
-            irregular = select_irregular_images(
-                images, image_ids, labels, fiber_results, dataset, bboxes,
-                neighborhood_dims, class_names, mean_dim_by_image,
-                pred_labels, top_k=12,
+            irregular = select_irregular_tokens(
+                images=images,
+                image_ids=image_ids,
+                labels=labels,
+                fiber_results=fiber_results,
+                dataset=dataset,
+                bboxes=bboxes,
+                neighborhood_dims=neighborhood_dims,
+                class_names=class_names,
+                image_mean_dims=mean_dim_by_image,
+                pred_labels=pred_labels,
+                top_k=12,
             )
             if irregular:
                 neigh_max = max(
@@ -538,7 +626,11 @@ def run_fiber_analysis_epoch(
         "fiber_summary": fiber_summary,
         "hypothesis_summary": hypothesis_summary,
         "hypothesis_summary_path": hypothesis_path,
+        "sparse_probe_result": sparse_probe_result,
         "final_dims": final_dims,
         "final_coords_3d": final_coords_3d,
         "final_tsne_3d": final_tsne_3d,
     }
+
+
+run_fiber_analysis_epoch = analyze_fiber_epoch

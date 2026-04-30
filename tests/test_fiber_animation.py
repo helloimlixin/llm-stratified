@@ -9,7 +9,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fiber.visualization import HAS_MATPLOTLIB
+from fiber.plots import HAS_MATPLOTLIB
 from fiber.animation import build_embedding_animation_frames, generate_embedding_animation
 
 

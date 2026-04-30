@@ -9,11 +9,11 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fiber.visualization import HAS_MATPLOTLIB, make_embedding_figure_3d
+from fiber.plots import HAS_MATPLOTLIB, build_embedding_scatter_figure
 from fiber.hypothesis import compute_stratified_manifold_hypothesis_metrics
 
 
-class TestFiberBundleHypothesis(unittest.TestCase):
+class TestFiberHypothesis(unittest.TestCase):
     def test_compute_hypothesis_metrics_detects_same_image_fiber_signal(self):
         embeddings = torch.tensor(
             [
@@ -68,12 +68,12 @@ class TestFiberBundleHypothesis(unittest.TestCase):
         self.assertIsInstance(metrics["hypothesis_narrative"], str)
 
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for figure generation")
-    def test_make_embedding_figure_3d_falls_back_to_2d(self):
+    def test_build_embedding_scatter_figure_falls_back_to_2d(self):
         coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.5, 0.2], [2.0, 1.0, 0.4]], dtype=np.float64)
         dims = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-        with patch("fiber.visualization.matplotlib_supports_3d", return_value=False):
-            fig = make_embedding_figure_3d(coords, dims)
+        with patch("fiber.plots.matplotlib_supports_3d", return_value=False):
+            fig = build_embedding_scatter_figure(coords, dims)
             try:
                 self.assertNotEqual(fig.axes[0].name, "3d")
                 self.assertIn("fallback", fig.axes[0].get_title().lower())

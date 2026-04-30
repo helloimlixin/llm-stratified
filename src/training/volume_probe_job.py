@@ -5,12 +5,12 @@ from typing import Optional
 
 import torch
 
-from data import make_loaders
+from datasets import create_data_loaders
 from models import DinoV2Wrapper
 from utils import seed_everything
 from volume_probe import run_volume_probe
 
-from training.configs import VolumeProbeConfig
+from training.config import VolumeProbeConfig
 from training.model_factory import build_classifier_model
 
 
@@ -39,7 +39,7 @@ def run_volume_probe_job(
     seed_everything(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    _train_loader, test_loader, num_classes, in_chans, final_img_size, _task = make_loaders(
+    _train_loader, test_loader, num_classes, in_chans, final_img_size, _task = create_data_loaders(
         dataset_name,
         root,
         img_size,

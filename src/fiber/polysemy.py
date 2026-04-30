@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from utils import denormalize_images
-from fiber.visualization import (
+from fiber.plots import (
     _draw_patch_box,
     _format_label_text,
     _format_top_label,

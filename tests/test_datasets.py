@@ -11,7 +11,13 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from data import COCO2017MultiLabel, WithIndex, build_dataset, make_loaders, resolve_class_names
+from datasets import (
+    Coco2017MultilabelDataset,
+    IndexedDataset,
+    create_data_loaders,
+    create_dataset_pair,
+    get_class_names,
+)
 
 
 class DummyDataset(Dataset):
@@ -22,25 +28,25 @@ class DummyDataset(Dataset):
         return torch.tensor(idx), torch.tensor(idx % 2)
 
 
-class TestDataHelpers(unittest.TestCase):
-    def test_with_index_nested_subset(self):
+class TestDatasetHelpers(unittest.TestCase):
+    def test_indexed_dataset_nested_subset(self):
         base = DummyDataset()
         subset = Subset(base, [2, 5, 7])
         nested = Subset(subset, [1, 2])  # base indices 5, 7
-        wrapped = WithIndex(nested)
+        wrapped = IndexedDataset(nested)
         _, _, gidx0 = wrapped[0]
         _, _, gidx1 = wrapped[1]
         self.assertEqual(gidx0, 5)
         self.assertEqual(gidx1, 7)
 
-    def test_resolve_class_names_from_dataset(self):
+    def test_get_class_names_from_dataset(self):
         class Dummy:
             classes = ["a", "b"]
 
-        self.assertEqual(resolve_class_names(Dummy(), "CUSTOM"), ["a", "b"])
+        self.assertEqual(get_class_names(Dummy(), "CUSTOM"), ["a", "b"])
 
-    def test_fake_dataset_build(self):
-        train_ds, test_ds, num_classes, in_chans, img_size, task = build_dataset("FAKEDATA", root=".", img_size=8)
+    def test_create_dataset_pair_for_fake_data(self):
+        train_ds, test_ds, num_classes, in_chans, img_size, task = create_dataset_pair("FAKEDATA", root=".", img_size=8)
         self.assertEqual(num_classes, 10)
         self.assertEqual(in_chans, 3)
         self.assertEqual(img_size, 8)
@@ -48,8 +54,8 @@ class TestDataHelpers(unittest.TestCase):
         self.assertGreater(len(train_ds), 0)
         self.assertGreater(len(test_ds), 0)
 
-    def test_make_loaders_keeps_small_train_subset(self):
-        train_loader, _test_loader, _num_classes, _in_chans, _img_size, _task = make_loaders(
+    def test_create_data_loaders_keeps_small_train_subset(self):
+        train_loader, _test_loader, _num_classes, _in_chans, _img_size, _task = create_data_loaders(
             "FAKEDATA",
             root=".",
             img_size=8,
@@ -91,14 +97,14 @@ class TestDataHelpers(unittest.TestCase):
                 )
             )
 
-            dataset = COCO2017MultiLabel(img_dir=img_dir, ann_file=ann_path)
+            dataset = Coco2017MultilabelDataset(img_dir=img_dir, ann_file=ann_path)
             img, target, resolved_idx = dataset[0]
             self.assertEqual(img.size, (8, 8))
             self.assertEqual(resolved_idx, 1)
             self.assertEqual(target.shape[0], 1)
             self.assertEqual(float(target[0].item()), 1.0)
 
-            wrapped = WithIndex(dataset)
+            wrapped = IndexedDataset(dataset)
             _img_w, _target_w, wrapped_idx = wrapped[0]
             self.assertEqual(wrapped_idx, 1)
 

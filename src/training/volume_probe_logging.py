@@ -36,10 +36,27 @@ def _representations(results: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return reps if isinstance(reps, dict) else {}
 
 
+def _representation_items(results: dict[str, Any]):
+    for rep_name, rep in _representations(results).items():
+        yield str(rep_name), rep if isinstance(rep, dict) else {}
+
+
+def _viz_entries(results: dict[str, Any]):
+    viz = (results or {}).get("viz", {}) or {}
+    return viz.items() if isinstance(viz, dict) else ()
+
+
+def _existing_output_path(output_dir: Path, filename: Any) -> Path | None:
+    if not isinstance(filename, str) or not filename:
+        return None
+    path = output_dir / filename
+    return path if path.exists() else None
+
+
 def extract_volume_probe_curves(results: dict[str, Any]) -> dict[str, dict[str, Any]]:
     curves: dict[str, dict[str, Any]] = {}
-    for rep_name, rep in _representations(results).items():
-        knn = (rep or {}).get("knn_curve")
+    for rep_name, rep in _representation_items(results):
+        knn = rep.get("knn_curve")
         if not (isinstance(knn, dict) and knn.get("k_values") and knn.get("radii")):
             continue
         try:
@@ -84,10 +101,8 @@ def _summary_payload(summary: dict[str, Any]) -> dict[str, int | float]:
 
 
 def _load_dims(output_dir: Path, filename: Any) -> np.ndarray | None:
-    if not isinstance(filename, str) or not filename:
-        return None
-    path = output_dir / filename
-    if not path.exists():
+    path = _existing_output_path(output_dir, filename)
+    if path is None:
         return None
     try:
         values = np.asarray(np.load(path), dtype=np.float64).reshape(-1)
@@ -100,9 +115,9 @@ def _load_dims(output_dir: Path, filename: Any) -> np.ndarray | None:
 def build_volume_probe_summary_rows(results: dict[str, Any]) -> list[dict[str, int | float | str]]:
     curves = extract_volume_probe_curves(results)
     rows: list[dict[str, int | float | str]] = []
-    for rep_name, rep in _representations(results).items():
+    for rep_name, rep in _representation_items(results):
         row: dict[str, int | float | str] = {"representation": rep_name}
-        row.update(_summary_payload((rep or {}).get("summary", {}) or {}))
+        row.update(_summary_payload(rep.get("summary", {}) or {}))
         curve = curves.get(rep_name)
         if curve is not None:
             row["k_min"] = curve["k_min"]
@@ -144,8 +159,8 @@ def build_volume_probe_log_payload(results: dict[str, Any], output_dir: Path, wa
     payload: dict[str, object] = {}
     curves = extract_volume_probe_curves(results)
 
-    for rep_name, rep in _representations(results).items():
-        summary = (rep or {}).get("summary", {}) or {}
+    for rep_name, rep in _representation_items(results):
+        summary = rep.get("summary", {}) or {}
         for metric_name, value in _summary_payload(summary).items():
             payload[f"volume_probe/{rep_name}/{metric_name}"] = value
 
@@ -154,7 +169,7 @@ def build_volume_probe_log_payload(results: dict[str, Any], output_dir: Path, wa
             payload[f"volume_probe/{rep_name}/k_min"] = curve["k_min"]
             payload[f"volume_probe/{rep_name}/k_max"] = curve["k_max"]
 
-        dims_hist = _maybe_histogram(wandb, _load_dims(output_dir, (rep or {}).get("dims_path")))
+        dims_hist = _maybe_histogram(wandb, _load_dims(output_dir, rep.get("dims_path")))
         if dims_hist is not None:
             payload[f"volume_probe/{rep_name}/dimension_hist"] = dims_hist
 
@@ -166,13 +181,10 @@ def build_volume_probe_log_payload(results: dict[str, Any], output_dir: Path, wa
     if curve_table is not None:
         payload["volume_probe/curve_table"] = curve_table
 
-    viz = (results or {}).get("viz", {}) or {}
-    if isinstance(viz, dict):
-        for key, filename in viz.items():
-            if not isinstance(filename, str) or not filename:
-                continue
-            path = output_dir / filename
-            if path.exists():
+    if hasattr(wandb, "Image"):
+        for key, filename in _viz_entries(results):
+            path = _existing_output_path(output_dir, filename)
+            if path is not None:
                 payload[f"volume_probe/viz/{key}"] = wandb.Image(str(path))
 
     return payload
@@ -202,26 +214,19 @@ def build_volume_probe_curve_rows(results: dict[str, Any]) -> list[tuple[int, di
 
 def collect_volume_probe_artifact_paths(results: dict[str, Any], output_dir: Path) -> list[Path]:
     paths: list[Path] = []
-    summary_path = output_dir / "volume_summary.json"
-    if summary_path.exists():
+    summary_path = _existing_output_path(output_dir, "volume_summary.json")
+    if summary_path is not None:
         paths.append(summary_path)
 
-    viz = (results or {}).get("viz", {}) or {}
-    if isinstance(viz, dict):
-        for filename in viz.values():
-            if not isinstance(filename, str) or not filename:
-                continue
-            path = output_dir / filename
-            if path.exists():
-                paths.append(path)
+    for _key, filename in _viz_entries(results):
+        path = _existing_output_path(output_dir, filename)
+        if path is not None:
+            paths.append(path)
 
-    for rep in _representations(results).values():
+    for _rep_name, rep in _representation_items(results):
         for key in ("dims_path", "results_path"):
-            filename = (rep or {}).get(key)
-            if not isinstance(filename, str) or not filename:
-                continue
-            path = output_dir / filename
-            if path.exists():
+            path = _existing_output_path(output_dir, rep.get(key))
+            if path is not None:
                 paths.append(path)
 
     return paths

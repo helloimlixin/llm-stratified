@@ -9,10 +9,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from data import get_norm_stats
+from datasets import get_dataset_normalization
 from utils import denormalize_images
 from fiber.polysemy import _assign_centroids
-from fiber.visualization import (
+from fiber.plots import (
     _label_name,
     _mask_patch,
     _pil_to_tensor01,
@@ -41,7 +41,7 @@ def compute_masked_classification_effects(
         return [], {}
     model.eval()
     task_multilabel = isinstance(labels, torch.Tensor) and labels.dim() == 2
-    mean_t, std_t = get_norm_stats(dataset, device=device, as_tensor=True)
+    mean_t, std_t = get_dataset_normalization(dataset, device=device, as_tensor=True)
     mean_t = mean_t.view(1, 3, 1, 1)
     std_t = std_t.view(1, 3, 1, 1)
 

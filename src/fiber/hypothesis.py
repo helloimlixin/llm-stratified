@@ -6,8 +6,14 @@ import math
 from typing import Any, Dict, List
 
 import numpy as np
-import scipy.spatial
 import torch
+
+
+def _pairwise_distance_matrix(points: np.ndarray) -> np.ndarray:
+    pts = np.asarray(points, dtype=np.float64)
+    squared_norms = np.sum(pts * pts, axis=1, keepdims=True)
+    distances_sq = np.maximum(squared_norms + squared_norms.T - 2.0 * (pts @ pts.T), 0.0)
+    return np.sqrt(distances_sq, out=distances_sq)
 
 
 def _first_dimension(res: Dict[str, Any] | None) -> float:
@@ -40,7 +46,7 @@ def _clip01(value: float) -> float:
     return float(max(0.0, min(1.0, value)))
 
 
-def compute_stratified_manifold_hypothesis_metrics(
+def summarize_hypothesis_metrics(
     *,
     embeddings: torch.Tensor,
     fiber_results: List[Dict[str, Any]],
@@ -117,7 +123,7 @@ def compute_stratified_manifold_hypothesis_metrics(
         dists = precomputed_dists[:n, :n].copy()
     else:
         emb_np = embeddings[:n].detach().cpu().numpy().astype(np.float64)
-        dists = scipy.spatial.distance_matrix(emb_np, emb_np)
+        dists = _pairwise_distance_matrix(emb_np)
     np.fill_diagonal(dists, np.inf)
 
     neighbor_k = min(16, max(1, n - 1), max(2, int(round(math.sqrt(n)))))
@@ -127,7 +133,7 @@ def compute_stratified_manifold_hypothesis_metrics(
     nn_idx = np.take_along_axis(nn_idx, nn_order, axis=1)
 
     same_image_mask = img_ids[nn_idx] == img_ids[:, None]
-    center_dists = scipy.spatial.distance_matrix(centers, centers)
+    center_dists = _pairwise_distance_matrix(centers)
     local_same_mask = same_image_mask & (
         np.take_along_axis(center_dists, nn_idx, axis=1) <= float(neighborhood_size)
     )
@@ -256,7 +262,7 @@ def compute_stratified_manifold_hypothesis_metrics(
     }
 
 
-def format_hypothesis_log_line(*, epoch: int, metrics: Dict[str, Any]) -> str:
+def format_hypothesis_summary_line(*, epoch: int, metrics: Dict[str, Any]) -> str:
     def _fmt(value: Any, fmt: str) -> str:
         try:
             value_f = float(value)
@@ -276,7 +282,7 @@ def format_hypothesis_log_line(*, epoch: int, metrics: Dict[str, Any]) -> str:
     )
 
 
-def compute_class_dim_means(
+def summarize_class_dimensions(
     fiber_results: List[Dict], labels: torch.Tensor, num_classes: int
 ) -> tuple[List[float], List[int]]:
     dims = np.array(
@@ -309,7 +315,7 @@ def compute_class_dim_means(
     )
 
 
-def compute_neighborhood_dimensions(
+def estimate_neighborhood_dimensions(
     fiber_results: List[Dict], bboxes: torch.Tensor, neighborhood_size: int
 ) -> List[float]:
     if not fiber_results or bboxes is None or bboxes.numel() == 0:
@@ -325,7 +331,7 @@ def compute_neighborhood_dimensions(
     centers = np.column_stack(
         ((b_np[:, 0] + b_np[:, 2]) * 0.5, (b_np[:, 1] + b_np[:, 3]) * 0.5)
     )
-    dist = scipy.spatial.distance_matrix(centers, centers)
+    dist = _pairwise_distance_matrix(centers)
     radius = neighborhood_size * 0.5
     result: list[float] = []
     for i in range(len(dims)):
@@ -334,3 +340,42 @@ def compute_neighborhood_dimensions(
         finite = masked_dims[np.isfinite(masked_dims)]
         result.append(float(np.mean(finite)) if finite.size else float("nan"))
     return result
+
+
+def compute_stratified_manifold_hypothesis_metrics(
+    *,
+    embeddings: torch.Tensor,
+    fiber_results: List[Dict[str, Any]],
+    image_ids: torch.Tensor,
+    bboxes: torch.Tensor,
+    neighborhood_dims: List[float] | None,
+    neighborhood_size: int,
+    alpha: float,
+    precomputed_dists: np.ndarray | None = None,
+) -> Dict[str, Any]:
+    return summarize_hypothesis_metrics(
+        embeddings=embeddings,
+        fiber_results=fiber_results,
+        image_ids=image_ids,
+        bboxes=bboxes,
+        neighborhood_dims=neighborhood_dims,
+        neighborhood_size=neighborhood_size,
+        alpha=alpha,
+        precomputed_dists=precomputed_dists,
+    )
+
+
+def format_hypothesis_log_line(*, epoch: int, metrics: Dict[str, Any]) -> str:
+    return format_hypothesis_summary_line(epoch=epoch, metrics=metrics)
+
+
+def compute_class_dim_means(
+    fiber_results: List[Dict], labels: torch.Tensor, num_classes: int
+) -> tuple[List[float], List[int]]:
+    return summarize_class_dimensions(fiber_results, labels, num_classes)
+
+
+def compute_neighborhood_dimensions(
+    fiber_results: List[Dict], bboxes: torch.Tensor, neighborhood_size: int
+) -> List[float]:
+    return estimate_neighborhood_dimensions(fiber_results, bboxes, neighborhood_size)

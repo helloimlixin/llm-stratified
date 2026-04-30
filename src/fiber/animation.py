@@ -8,10 +8,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from fiber.visualization import (
+from fiber.plots import (
     HAS_MATPLOTLIB,
     _require_matplotlib,
-    project_embeddings_2d,
+    project_embeddings_pca_2d,
 )
 
 
@@ -46,11 +46,11 @@ def build_embedding_animation_frames(
         ),
         snapshots[-1][1],
     )
-    _, final_mean, final_basis = project_embeddings_2d(reference_embeddings)
+    _, final_mean, final_basis = project_embeddings_pca_2d(reference_embeddings)
 
     frames: list[dict[str, Any]] = []
     for epoch, embeddings, labels in snapshots:
-        coords2d, _, _ = project_embeddings_2d(embeddings, mean=final_mean, basis=final_basis)
+        coords2d, _, _ = project_embeddings_pca_2d(embeddings, mean=final_mean, basis=final_basis)
         class_ids = _labels_to_animation_classes(labels)
         n_points = min(coords2d.shape[0], class_ids.shape[0])
         if n_points == 0:

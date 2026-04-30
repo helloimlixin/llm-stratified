@@ -1,50 +1,78 @@
-"""Fiber bundle analysis package.
+"""Fiber analysis package with lazy top-level re-exports."""
 
-Re-exports the public API so that ``from fiber import X`` works for all
-symbols previously available from ``fiber_bundle`` or ``stratified_geometry``.
-"""
+from __future__ import annotations
 
-from fiber.geometry import (  # noqa: F401
-    normalize_volume_range,
-    run_fiber_bundle_test,
-    run_fiber_bundle_test_from_sorted_dists,
-    sorted_distance_matrix,
-    summarize_stratifications,
-)
-from fiber.collection import collect_patch_tokens  # noqa: F401
-from fiber.hypothesis import (  # noqa: F401
-    compute_class_dim_means,
-    compute_neighborhood_dimensions,
-    compute_stratified_manifold_hypothesis_metrics,
-    format_hypothesis_log_line,
-)
-from fiber.visualization import (  # noqa: F401
-    HAS_MATPLOTLIB,
-    HAS_TSNE,
-    add_heatmap_patch,
-    extract_patch_image,
-    make_embedding_figure_3d,
-    make_embedding_figure_tsne,
-    make_polysemy_entropy_scatter,
-    make_polysemy_irregularity_plot,
-    plot_progress,
-    project_embeddings_2d,
-    project_embeddings_3d,
-    select_irregular_images,
-    select_singular_token_indices,
-    tsne_embeddings_3d,
-    matplotlib_supports_3d,
-)
-from fiber.animation import (  # noqa: F401
-    build_embedding_animation_frames,
-    generate_embedding_animation,
-)
-from fiber.polysemy import (  # noqa: F401
-    compute_token_polysemy_entropy_scores,
-    compute_token_polysemy_for_anchors,
-    make_polysemy_entropy_triptychs,
-    make_polysemy_gallery,
-    select_polysemy_entropy_images,
-)
-from fiber.ablation import compute_masked_classification_effects  # noqa: F401
-from fiber.orchestration import run_fiber_analysis_epoch  # noqa: F401
+from importlib import import_module
+
+_EXPORTS = {
+    "HAS_MATPLOTLIB": "fiber.plots",
+    "HAS_TSNE": "fiber.plots",
+    "add_heatmap_patch": "fiber.plots",
+    "analyze_fiber_epoch": "fiber.analysis",
+    "analyze_stratification": "fiber.geometry",
+    "analyze_stratification_from_sorted_distances": "fiber.geometry",
+    "build_embedding_animation_frames": "fiber.animation",
+    "build_embedding_scatter_figure": "fiber.plots",
+    "build_tsne_embedding_figure": "fiber.plots",
+    "collect_patch_tokens": "fiber.patch_tokens",
+    "compute_class_dim_means": "fiber.hypothesis",
+    "compute_masked_classification_effects": "fiber.ablation",
+    "compute_neighborhood_dimensions": "fiber.hypothesis",
+    "compute_stratified_manifold_hypothesis_metrics": "fiber.hypothesis",
+    "compute_token_polysemy_entropy_scores": "fiber.polysemy",
+    "compute_token_polysemy_for_anchors": "fiber.polysemy",
+    "estimate_neighborhood_dimensions": "fiber.hypothesis",
+    "extract_patch_vectors": "fiber.sparse_probe",
+    "extract_patch_image": "fiber.plots",
+    "format_hypothesis_log_line": "fiber.hypothesis",
+    "format_hypothesis_summary_line": "fiber.hypothesis",
+    "generate_embedding_animation": "fiber.animation",
+    "make_embedding_figure_3d": "fiber.plots",
+    "make_embedding_figure_tsne": "fiber.plots",
+    "make_polysemy_entropy_scatter": "fiber.plots",
+    "make_polysemy_entropy_triptychs": "fiber.polysemy",
+    "make_polysemy_gallery": "fiber.polysemy",
+    "make_polysemy_irregularity_plot": "fiber.plots",
+    "matplotlib_supports_3d": "fiber.plots",
+    "normalize_volume_range": "fiber.geometry",
+    "plot_progress": "fiber.plots",
+    "project_embeddings_2d": "fiber.plots",
+    "project_embeddings_3d": "fiber.plots",
+    "project_embeddings_pca_2d": "fiber.plots",
+    "project_embeddings_pca_3d": "fiber.plots",
+    "project_embeddings_tsne_3d": "fiber.plots",
+    "run_sparse_dictionary_probe": "fiber.sparse_probe",
+    "run_fiber_analysis_epoch": "fiber.analysis",
+    "run_fiber_bundle_test": "fiber.geometry",
+    "run_fiber_bundle_test_from_sorted_dists": "fiber.geometry",
+    "save_polysemy_entropy_scatter_plot": "fiber.plots",
+    "save_polysemy_irregularity_plot": "fiber.plots",
+    "save_training_summary_plot": "fiber.plots",
+    "select_irregular_images": "fiber.plots",
+    "select_irregular_tokens": "fiber.plots",
+    "select_polysemy_entropy_images": "fiber.polysemy",
+    "select_fiber_anchors": "fiber.sparse_probe",
+    "select_singular_token_indices": "fiber.plots",
+    "select_singular_tokens": "fiber.plots",
+    "sorted_distance_matrix": "fiber.geometry",
+    "summarize_class_dimensions": "fiber.hypothesis",
+    "summarize_hypothesis_metrics": "fiber.hypothesis",
+    "summarize_stratification": "fiber.geometry",
+    "summarize_stratifications": "fiber.geometry",
+    "tsne_embeddings_3d": "fiber.plots",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

@@ -1,0 +1,16 @@
+# Frozen SAM image encoder + trainable linear head
+name: sam_base
+
+frozen_backbone: sam
+frozen_backbone_model: facebook/sam-vit-base
+
+timm_model: null
+timm_pretrained: false
+
+patch_size: 16
+embed_dim: 256
+depth: 12
+num_heads: 12
+mlp_ratio: 4.0
+dropout: 0.0
+compile: false

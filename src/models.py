@@ -25,18 +25,23 @@ except ImportError:
 from utils import denormalize_images
 
 __all__ = [
+    "DinoV2FeatureExtractor",
     "DinoV2Wrapper",
+    "FeedForwardBlock",
+    "PatchEmbeddingLayer",
     "PatchEmbed",
-    "MlpBlock",
     "SamBackboneWrapper",
-    "TransformerBlock",
+    "SamImageEncoder",
     "TinyViT",
     "resolve_patch_size",
+    "TimmVisionTransformer",
     "TimmViTWrapper",
+    "VisionTransformerEncoderBlock",
+    "TransformerBlock",
 ]
 
 
-class PatchEmbed(nn.Module):
+class PatchEmbeddingLayer(nn.Module):
     """Converts an image batch into a sequence of flattened patch embeddings."""
 
     def __init__(self, img_size: int = 32, patch_size: int = 4, in_chans: int = 3, embed_dim: int = 192) -> None:
@@ -50,7 +55,7 @@ class PatchEmbed(nn.Module):
         return x.flatten(2).transpose(1, 2), h2 * w2
 
 
-class MlpBlock(nn.Module):
+class FeedForwardBlock(nn.Module):
     """Feed-forward block used inside the transformer encoder."""
 
     def __init__(self, embed_dim: int, mlp_ratio: float = 2.0, dropout_rate: float = 0.1) -> None:
@@ -65,7 +70,7 @@ class MlpBlock(nn.Module):
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
-class TransformerBlock(nn.Module):
+class VisionTransformerEncoderBlock(nn.Module):
     """Standard Transformer encoder block with pre-norm and dropout."""
 
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float = 2.0, dropout_rate: float = 0.1) -> None:
@@ -74,7 +79,7 @@ class TransformerBlock(nn.Module):
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout_rate, batch_first=True)
         self.drop_path1 = nn.Dropout(dropout_rate)
         self.norm2 = nn.LayerNorm(embed_dim)
-        self.mlp = MlpBlock(embed_dim, mlp_ratio, dropout_rate)
+        self.mlp = FeedForwardBlock(embed_dim, mlp_ratio, dropout_rate)
         self.drop_path2 = nn.Dropout(dropout_rate)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -102,13 +107,13 @@ class TinyViT(nn.Module):
         super().__init__()
         self.embed_dim, self.num_classes = embed_dim, num_classes
         self.num_prefix_tokens = 1
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        self.patch_embed = PatchEmbeddingLayer(img_size, patch_size, in_chans, embed_dim)
         num_patches = (img_size // patch_size) ** 2
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(dropout_rate)
         self.blocks = nn.ModuleList(
-            [TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout_rate) for _ in range(depth)]
+            [VisionTransformerEncoderBlock(embed_dim, num_heads, mlp_ratio, dropout_rate) for _ in range(depth)]
         )
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
@@ -161,7 +166,7 @@ def resolve_patch_size(model) -> int | None:
         return None
 
 
-class TimmViTWrapper(nn.Module):
+class TimmVisionTransformer(nn.Module):
     """Wrap timm ViT to expose patch tokens via forward_features."""
 
     def __init__(self, model_name: str, num_classes: int, pretrained: bool = True):
@@ -210,7 +215,7 @@ def _resolve_processor_size(processor, config) -> int:
     return int(getattr(config, "image_size", 224))
 
 
-class DinoV2Wrapper(nn.Module):
+class DinoV2FeatureExtractor(nn.Module):
     """Frozen DINOv2 feature extractor with layer-wise patch token access."""
 
     def __init__(self, model_name: str = "facebook/dinov2-base", token_layers: Optional[list[int]] = None):
@@ -284,7 +289,7 @@ class DinoV2Wrapper(nn.Module):
         return pack
 
 
-class SamBackboneWrapper(nn.Module):
+class SamImageEncoder(nn.Module):
     """Frozen SAM image encoder wrapper with optional box-prompted mask prediction."""
 
     def __init__(self, model_name: str = "facebook/sam-vit-base"):
@@ -394,3 +399,76 @@ class SamBackboneWrapper(nn.Module):
         elif mask_tensor.ndim == 2:
             mask_tensor = mask_tensor.unsqueeze(0)
         return [mask_tensor[i].squeeze() for i in range(mask_tensor.shape[0])]
+
+
+class _PatchEmbedShim(nn.Module):
+    def __init__(self, patch_size: int):
+        super().__init__()
+        self.patch_size = int(patch_size)
+
+
+class FrozenBackboneClassifier(nn.Module):
+    """Attach a trainable linear classifier to a frozen DINOv2 or SAM backbone.
+
+    Exposes the ``forward_features`` / ``tokens_to_logits`` / ``patch_embed``
+    interface that the fiber analysis pipeline expects.  The backbone is fully
+    frozen; only ``head`` receives gradients.
+    """
+
+    def __init__(self, backbone_kind: str, num_classes: int, **backbone_kwargs):
+        super().__init__()
+        self.backbone_kind = backbone_kind.lower()
+        if self.backbone_kind == "dinov2":
+            self.backbone = DinoV2FeatureExtractor(**backbone_kwargs)
+        elif self.backbone_kind == "sam":
+            self.backbone = SamImageEncoder(**backbone_kwargs)
+        else:
+            raise ValueError(f"Unknown backbone_kind '{backbone_kind}'; expected 'dinov2' or 'sam'")
+
+        self.num_classes = int(num_classes)
+        self.embed_dim = int(self.backbone.embed_dim)
+        self.patch_size = int(self.backbone.patch_size)
+        self.has_dist_token = False
+        self.patch_embed = _PatchEmbedShim(self.patch_size)
+        self.head = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
+
+    def _dataset_name(self) -> str:
+        return getattr(self, "_dataset_name_cached", "IMAGENET")
+
+    def set_dataset_name(self, dataset_name: str) -> None:
+        self._dataset_name_cached = str(dataset_name)
+
+    def _extract_last_layer_patch_tokens(self, imgs: torch.Tensor) -> torch.Tensor:
+        pixel_values, _ = self.backbone.prepare_images_for_features(imgs, self._dataset_name())
+        pack = self.backbone.forward_feature_pack(pixel_values)
+        if self.backbone_kind == "dinov2":
+            last_key = next((k for k in ("tokens", "tokens_layer_last") if k in pack), None)
+            if last_key is None:
+                last_key = [k for k in pack.keys() if k != "patch_embeddings"][-1]
+            tokens = pack[last_key]
+            n_register = int(getattr(self.backbone, "num_register_tokens", 0))
+            cls = tokens[:, :1, :]
+            patch = tokens[:, 1 + n_register :, :]
+            return torch.cat([cls, patch], dim=1)
+        tokens = pack["tokens"]
+        cls = tokens.mean(dim=1, keepdim=True)
+        return torch.cat([cls, tokens], dim=1)
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            tokens = self._extract_last_layer_patch_tokens(x)
+        return tokens
+
+    def tokens_to_logits(self, tokens: torch.Tensor) -> torch.Tensor:
+        return self.head(tokens[:, 0])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.tokens_to_logits(self.forward_features(x))
+
+
+PatchEmbed = PatchEmbeddingLayer
+MlpBlock = FeedForwardBlock
+TransformerBlock = VisionTransformerEncoderBlock
+TimmViTWrapper = TimmVisionTransformer
+DinoV2Wrapper = DinoV2FeatureExtractor
+SamBackboneWrapper = SamImageEncoder

@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from training.configs import build_sam_fiber_config, build_volume_probe_config
+from training.config import FiberConfig, make_sam_fiber_config, make_volume_probe_config
 from training.runner import run_training
 from training.wandb_utils import resolve_wandb_name
 from utils import resolve_ddp_settings
 
 
 @dataclass(frozen=True)
-class OutputPaths:
+class RunPaths:
     output_dir: Path
     checkpoints_dir: Path
     embeddings_dir: Path
@@ -20,14 +20,14 @@ class OutputPaths:
     volume_probe_dir: Path
 
 
-def prepare_output_paths(
+def create_run_paths(
     paths_cfg: Any,
     output_dir: Path,
     *,
     fiber_enabled: bool,
     sam_fiber_enabled: bool = False,
-) -> OutputPaths:
-    paths = OutputPaths(
+) -> RunPaths:
+    paths = RunPaths(
         output_dir=output_dir,
         checkpoints_dir=output_dir / paths_cfg.checkpoints,
         embeddings_dir=output_dir / paths_cfg.embeddings,
@@ -41,15 +41,18 @@ def prepare_output_paths(
     return paths
 
 
-def maybe_run_sam_fiber(cfg: Any, paths: OutputPaths) -> bool:
-    sam_fiber_cfg = build_sam_fiber_config(cfg.sam_fiber)
-    if not sam_fiber_cfg.enabled:
+def _is_primary_process() -> bool:
+    return int(os.environ.get("RANK", "0")) == 0
+
+
+def run_sam_fiber_job_if_enabled(cfg: Any, paths: RunPaths) -> bool:
+    sam_fiber_config = make_sam_fiber_config(cfg.sam_fiber)
+    if not sam_fiber_config.enabled:
         return False
+    if not _is_primary_process():
+        return True
 
     from training.sam_fiber_job import run_sam_fiber_job
-
-    if int(os.environ.get("RANK", "0")) != 0:
-        return True
 
     results = run_sam_fiber_job(
         dataset_name=cfg.data.name,
@@ -63,7 +66,7 @@ def maybe_run_sam_fiber(cfg: Any, paths: OutputPaths) -> bool:
         checkpoints_dir=paths.checkpoints_dir,
         embeddings_dir=paths.embeddings_dir,
         analysis_dir=paths.analysis_dir,
-        sam_cfg=sam_fiber_cfg,
+        sam_cfg=sam_fiber_config,
         wandb_enabled=cfg.wandb.enabled,
         wandb_project=cfg.wandb.project,
         wandb_name=resolve_wandb_name(cfg, suffix="sam_fiber"),
@@ -78,16 +81,15 @@ def maybe_run_sam_fiber(cfg: Any, paths: OutputPaths) -> bool:
     return True
 
 
-def maybe_run_volume_probe(cfg: Any, paths: OutputPaths) -> bool:
-    volume_probe_cfg = build_volume_probe_config(cfg.volume_probe)
-    if not volume_probe_cfg.enabled:
+def run_volume_probe_job_if_enabled(cfg: Any, paths: RunPaths) -> bool:
+    volume_probe_config = make_volume_probe_config(cfg.volume_probe)
+    if not volume_probe_config.enabled:
         return False
+    if not _is_primary_process():
+        return True
 
     from training.volume_probe_job import run_volume_probe_job
     from training.volume_probe_logging import log_volume_probe_to_wandb
-
-    if int(os.environ.get("RANK", "0")) != 0:
-        return True
 
     paths.volume_probe_dir.mkdir(parents=True, exist_ok=True)
     results = run_volume_probe_job(
@@ -109,7 +111,7 @@ def maybe_run_volume_probe(cfg: Any, paths: OutputPaths) -> bool:
         timm_pretrained=cfg.model.timm_pretrained,
         seed=cfg.seed,
         output_dir=paths.volume_probe_dir,
-        volume_cfg=volume_probe_cfg,
+        volume_cfg=volume_probe_config,
     )
     log_volume_probe_to_wandb(
         enabled=cfg.wandb.enabled,
@@ -123,7 +125,7 @@ def maybe_run_volume_probe(cfg: Any, paths: OutputPaths) -> bool:
     return True
 
 
-def run_training_from_cfg(cfg: Any, paths: OutputPaths, fiber_cfg: Any) -> None:
+def run_training_job_from_config(cfg: Any, paths: RunPaths, fiber_config: FiberConfig) -> None:
     use_ddp, local_rank, world_size = resolve_ddp_settings(
         use_ddp=cfg.compute.use_ddp,
         local_rank=getattr(cfg.compute, "local_rank", 0),
@@ -164,7 +166,9 @@ def run_training_from_cfg(cfg: Any, paths: OutputPaths, fiber_cfg: Any) -> None:
         subset_test=cfg.data.subset_test,
         timm_model=cfg.model.timm_model,
         timm_pretrained=cfg.model.timm_pretrained,
-        fiber_cfg=fiber_cfg,
+        frozen_backbone=getattr(cfg.model, "frozen_backbone", None),
+        frozen_backbone_model=getattr(cfg.model, "frozen_backbone_model", None),
+        fiber_cfg=fiber_config,
         use_ddp=use_ddp,
         local_rank=local_rank,
         world_size=world_size,

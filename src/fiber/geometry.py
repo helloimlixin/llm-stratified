@@ -18,10 +18,13 @@ except ImportError:  # pragma: no cover
     scipy_stdtr = None
 
 __all__ = [
+    "analyze_stratification",
+    "analyze_stratification_from_sorted_distances",
     "normalize_volume_range",
     "run_fiber_bundle_test",
     "run_fiber_bundle_test_from_sorted_dists",
     "sorted_distance_matrix",
+    "summarize_stratification",
     "summarize_stratifications",
 ]
 
@@ -229,7 +232,7 @@ def sorted_distance_matrix(coords: np.ndarray) -> np.ndarray:
     return np.sort(dists, axis=0)
 
 
-def run_fiber_bundle_test_from_sorted_dists(
+def analyze_stratification_from_sorted_distances(
     dists_sorted: np.ndarray,
     *,
     vol_min: int = 8,
@@ -238,7 +241,7 @@ def run_fiber_bundle_test_from_sorted_dists(
     alpha: float = 1e-2,
     nstrat: int = 3,
 ) -> list[dict[str, list[float]]]:
-    """Fiber bundle test using a precomputed sorted distance matrix."""
+    """Analyze stratification using a precomputed sorted distance matrix."""
     npts = int(dists_sorted.shape[0])
     if npts < 2:
         return []
@@ -252,7 +255,7 @@ def run_fiber_bundle_test_from_sorted_dists(
     ]
 
 
-def run_fiber_bundle_test(
+def analyze_stratification(
     embeddings: torch.Tensor,
     vol_min: int = 8,
     vol_max: int = 64,
@@ -260,7 +263,7 @@ def run_fiber_bundle_test(
     alpha: float = 1e-2,
     nstrat: int = 3,
 ) -> tuple[list[dict[str, list[float]]], np.ndarray, np.ndarray]:
-    """Run fiber bundle test and return (results, sorted_dists, unsorted_dists).
+    """Analyze embedding stratification and return (results, sorted_dists, unsorted_dists).
 
     Returns both distance matrices so callers can reuse them
     (e.g. hypothesis metrics needs the unsorted matrix) without recomputation.
@@ -271,7 +274,7 @@ def run_fiber_bundle_test(
     np.fill_diagonal(d2, 0.0)
     unsorted_dists = np.sqrt(d2, out=d2)
     dists_sorted = np.sort(unsorted_dists, axis=0)
-    results = run_fiber_bundle_test_from_sorted_dists(
+    results = analyze_stratification_from_sorted_distances(
         dists_sorted,
         vol_min=vol_min,
         vol_max=vol_max,
@@ -282,7 +285,7 @@ def run_fiber_bundle_test(
     return results, dists_sorted, unsorted_dists
 
 
-def summarize_stratifications(
+def summarize_stratification(
     results: list[dict[str, list[float]]], alpha: float = 1e-2
 ) -> dict[str, float]:
     first_dims, min_pvals, irr_scores, irregular_tokens = [], [], [], 0
@@ -306,3 +309,46 @@ def summarize_stratifications(
         "max_irregularity": float(np.max(irr_scores)) if irr_scores else float("nan"),
         "irregular_ratio": irregular_tokens / len(results) if results else float("nan"),
     }
+
+
+def run_fiber_bundle_test_from_sorted_dists(
+    dists_sorted: np.ndarray,
+    *,
+    vol_min: int = 8,
+    vol_max: int = 64,
+    ws: int = 8,
+    alpha: float = 1e-2,
+    nstrat: int = 3,
+) -> list[dict[str, list[float]]]:
+    return analyze_stratification_from_sorted_distances(
+        dists_sorted,
+        vol_min=vol_min,
+        vol_max=vol_max,
+        ws=ws,
+        alpha=alpha,
+        nstrat=nstrat,
+    )
+
+
+def run_fiber_bundle_test(
+    embeddings: torch.Tensor,
+    vol_min: int = 8,
+    vol_max: int = 64,
+    ws: int = 8,
+    alpha: float = 1e-2,
+    nstrat: int = 3,
+) -> tuple[list[dict[str, list[float]]], np.ndarray, np.ndarray]:
+    return analyze_stratification(
+        embeddings,
+        vol_min=vol_min,
+        vol_max=vol_max,
+        ws=ws,
+        alpha=alpha,
+        nstrat=nstrat,
+    )
+
+
+def summarize_stratifications(
+    results: list[dict[str, list[float]]], alpha: float = 1e-2
+) -> dict[str, float]:
+    return summarize_stratification(results, alpha=alpha)

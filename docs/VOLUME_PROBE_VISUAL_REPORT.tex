@@ -1,0 +1,151 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\title{Volume Probe Visual Report}
+\date{Generated: 2026-04-22 00:00 EDT}
+
+\begin{document}
+\maketitle
+
+\section*{Source Run}
+\begin{itemize}[leftmargin=1.5em]
+\item Sweep root: \texttt{/scratch/xl598/runs/llm-stratified/20260413\_154940\_volume\_probe\_visual\_sweep}
+\item Combined report: \texttt{/scratch/xl598/runs/llm-stratified/20260413\_154940\_volume\_probe\_visual\_sweep/volume\_probe\_sweep\_report.md}
+\item Coverage: \texttt{18/18} completed runs
+\item SLURM jobs: \texttt{51035214} (\texttt{pixel-strat-sweep}), \texttt{51035215} (\texttt{pretrained-pixel-sweep})
+\end{itemize}
+
+\section*{Purpose}
+This note condenses the completed April 13, 2026 volume-probe sweep into a paper-style figure set. The selected panels emphasize the same objects the sweep was designed to measure: local dimension distributions, irregularity concentration in a 2D projection, and local log-radius versus log-k scaling curves for representative anchors.
+
+\section*{Main Takeaways}
+\begin{itemize}[leftmargin=1.5em]
+\item Raw pixel patches remained strongly stratified across the sweep. The strongest raw-pixel run was \texttt{STL10}, patch \texttt{8}, stride \texttt{8}, with \texttt{mean\_dim = 13.20} and \texttt{irregular\_ratio = 0.875}.
+\item TinyViT tokens were typically more irregular than matched raw pixels. In the pure pixel sweep, the token-minus-raw irregularity delta averaged \texttt{+0.050}.
+\item Overlap was not the main driver. For matched raw-pixel comparisons, half-stride overlap increased irregularity in only \texttt{1/4} cases. The largest increase was \texttt{STL10}, patch \texttt{16}, from \texttt{0.861} to \texttt{0.873}.
+\item Frozen DINO patch embeddings were smoother than DINO last-layer tokens on both shared datasets. On \texttt{STL10}, DINO patch embeddings reached \texttt{mean\_dim = 25.91} with \texttt{irregular\_ratio = 0.814}, while DINO last-layer tokens were \texttt{mean\_dim = 5.62} with \texttt{irregular\_ratio = 0.895}.
+\item DINO last-layer tokens were not smoother than matched raw pixels in this sweep. Across the \texttt{6} completed DINO runs, mean raw-pixel irregularity was \texttt{0.852} and mean token irregularity was \texttt{0.897}.
+\end{itemize}
+
+\section*{Selected Metrics}
+Metric cells use \texttt{mean\_dim / irregular\_ratio}.
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Case & Raw pixels & Tokens & Patch embeddings \\
+\midrule
+STL10, patch 8, stride 8 & \texttt{13.20 / 0.875} & \texttt{8.42 / 0.944} & \texttt{12.66 / 0.868} \\
+STL10, patch 16, stride 16 & \texttt{16.00 / 0.861} & \texttt{6.10 / 0.927} & \texttt{15.46 / 0.854} \\
+STL10, patch 16, stride 8 & \texttt{17.60 / 0.873} & \texttt{6.10 / 0.927} & \texttt{15.46 / 0.854} \\
+STL10, DINO last, stride 14 & \texttt{10.41 / 0.877} & \texttt{5.62 / 0.895} & \texttt{25.91 / 0.814} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section*{Figure 1: Strongest Raw Pixel Regime}
+\texttt{STL10}, patch \texttt{8}, stride \texttt{8} is the strongest raw-pixel configuration in the sweep. The detail panel shows a broad high-dimension raw-pixel distribution together with concentrated irregular regions in the PCA projection. The scaling panel shows that the selected anchors retain nontrivial slope changes rather than collapsing to a single smooth regime.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/raw_detail_stl10_ps8_stride8.png}
+\caption{Raw-pixel detail panel.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/raw_scaling_stl10_ps8_stride8.png}
+\caption{Raw-pixel scaling curves.}
+\end{subfigure}
+\caption{Best raw-pixel run in the completed sweep.}
+\end{figure}
+
+\section*{Figure 2: TinyViT Tokens on the Same STL10 Run}
+On the same \texttt{STL10}, patch \texttt{8}, stride \texttt{8} run, TinyViT tokens were more irregular than the raw patches they were built from: \texttt{0.944} versus \texttt{0.875}. The detail panel reflects that compression into a lower-dimensional but more singular token geometry, and the scaling panel shows sharper regime transitions for the selected anchors.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/tinyvit_tokens_detail_stl10_ps8_stride8.png}
+\caption{Token detail panel.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/tinyvit_tokens_scaling_stl10_ps8_stride8.png}
+\caption{Token scaling curves.}
+\end{subfigure}
+\caption{TinyViT tokens for the same STL10 run used in Figure 1.}
+\end{figure}
+
+\section*{Figure 3: Overlap Comparison}
+This pair isolates the raw-pixel overlap effect on \texttt{STL10}, patch \texttt{16}. The non-overlapping baseline (\texttt{stride 16}) had \texttt{irregular\_ratio = 0.861}, while the half-stride run (\texttt{stride 8}) rose modestly to \texttt{0.873}. The difference is visible, but the sweep-level result is that overlap only weakly perturbed the already-strong stratification signal.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/raw_detail_stl10_ps16_stride16_baseline.png}
+\caption{Non-overlapping baseline (\texttt{stride 16}).}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/raw_detail_stl10_ps16_stride8_overlap.png}
+\caption{Half-stride overlap (\texttt{stride 8}).}
+\end{subfigure}
+\caption{Raw-pixel detail panels for the overlap comparison.}
+\end{figure}
+
+\section*{Figure 4: DINO Patch Embeddings Versus DINO Tokens}
+For \texttt{STL10} with frozen DINOv2-base at native patch size \texttt{14}, patch embeddings were visibly smoother than last-layer tokens. Quantitatively, patch embeddings had \texttt{irregular\_ratio = 0.814}, while tokens had \texttt{0.895}. The detail panels show the same split: patch embeddings preserve a cleaner high-dimensional structure, whereas the final token space is more singular.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/dino_patch_detail_stl10.png}
+\caption{DINO patch-embedding detail.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/dino_patch_scaling_stl10.png}
+\caption{DINO patch-embedding scaling.}
+\end{subfigure}
+
+\vspace{0.75em}
+
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/dino_token_detail_stl10.png}
+\caption{DINO token detail.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{imgs/volume_probe_visual_report/dino_token_scaling_stl10.png}
+\caption{DINO token scaling.}
+\end{subfigure}
+\caption{Frozen DINOv2-base on STL10: patch embeddings remain smoother than last-layer tokens.}
+\end{figure}
+
+\section*{Notes}
+\begin{itemize}[leftmargin=1.5em]
+\item The full run root also contains \texttt{nn\_irregular\_*} retrieval grids for each representation; those were kept out of this condensed note to keep the figure set focused.
+\item Selected panels were copied into \texttt{docs/imgs/volume\_probe\_visual\_report/} so the report stays stable even if the scratch run tree changes.
+\item The quantitative summary in this note comes directly from the completed report generated on 2026-04-14.
+\end{itemize}
+
+\end{document}
