@@ -66,7 +66,6 @@ CMD=(
   "fiber=sparse_probe"
   "fiber.sparse_probe_residual_threshold=$RESIDUAL_THRESHOLD"
   "fiber.sparse_probe_auto_neighbor_k=$NEIGHBOR_K"
-  "fiber.sparse_probe_global_dictionary=true"
   "fiber.embed_interval=$EMBED_INTERVAL"
   "fiber.embedding_animation=false"
   "training.epochs=$EPOCHS"

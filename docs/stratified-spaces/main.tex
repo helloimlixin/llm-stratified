@@ -88,6 +88,30 @@ To detect multiple local scaling regimes, we estimate a local slope profile over
 \end{equation}
 We summarize each representation by its mean local dimension and its irregular ratio: the fraction of anchors whose minimum p-value falls below the test threshold.
 
+\paragraph{Local sparse-complexity probe.}
+For trained-token diagnostics we add a local sparse dictionary probe that uses the same token neighborhoods but measures raw-patch reconstruction complexity. At checkpoint $t$, fix a radius $\epsilon_t$ in token space and define the neighborhood
+\begin{equation}
+  \mathcal{N}_i(\epsilon_t)=\{j:\|z_j-z_i\|_2 \le \epsilon_t\}.
+\end{equation}
+In the reported sweep, $\epsilon_t$ is the median 32-nearest-neighbor radius at that checkpoint, so the radius is fixed across all anchors within a checkpoint. We keep anchors with $|\mathcal{N}_i|\ge 12$. For each neighbor $j$, let $x_j\in\R^p$ be the corresponding raw image patch vector and let $\tilde{x}_j$ be its centered, unit-norm version. For each anchor $i$ we fit a local dictionary $D_i\in\R^{M_i\times p}$, $M_i\le 32$, from the top right singular vectors of the centered matrix $\{\tilde{x}_j:j\in\mathcal{N}_i\}$, with local patch mean $\mu_i$.
+For each patch in the neighborhood, Orthogonal Matching Pursuit estimates the minimum code length needed to reach one global residual tolerance $\tau=0.15$:
+\begin{equation}
+  s_{ij}
+  =
+  \min\left\{
+    s\le S_{\max}:
+    \exists a,\ \|a\|_0\le s,\ 
+    \frac{\|(\tilde{x}_j-\mu_i)-D_i^\top a\|_2}{\|\tilde{x}_j-\mu_i\|_2}
+    \le \tau
+  \right\},
+  \qquad S_{\max}=16 .
+\end{equation}
+The token-level sparse complexity is
+\begin{equation}
+  S_i=\frac{1}{|\mathcal{N}_i|}\sum_{j\in\mathcal{N}_i} s_{ij}.
+\end{equation}
+We summarize the distribution of $S_i$ and its correlations with neighborhood support size $|\mathcal{N}_i|$, local dimension $\dimhat_i$, and irregularity $\irr_i$. This diagnostic deliberately uses one local dictionary per token neighborhood and no one-dimensional coordinate ordering.
+
 \paragraph{Representation spaces.}
 We compare three families of spaces:
 \begin{itemize}[leftmargin=1.5em]
@@ -208,7 +232,7 @@ In the two completed multilayer DINO runs, irregularity increases from layer 03 
 \label{fig:dino}
 \end{figure}
 
-\subsection{Auxiliary Token-Patch and Sparse-Fiber Diagnostics}
+\subsection{Auxiliary Token-Patch and Local Sparse Diagnostics}
 To make the dimension estimates visually inspectable, we also include auxiliary trained \dataset{STL10} fiber diagnostics. These runs are separate from the 18-run no-training volume sweep above and are not used in the headline raw-pixel or DINOv2 averages. \Cref{fig:token-dim-examples} shows representative token patches selected from low-, middle-, and high-dimension anchors in the earlier long trained-fiber visualization run. The examples provide a qualitative check that the local dimension field is attached to concrete patch neighborhoods rather than only to aggregate histograms.
 
 \begin{figure}[H]
@@ -234,44 +258,51 @@ To make the dimension estimates visually inspectable, we also include auxiliary 
 \label{fig:token-dim-examples}
 \end{figure}
 
-\paragraph{Global dictionary sparse probe.}
-We further ask whether raw-patch sparse complexity changes as one moves along the empirical fiber coordinate. This auxiliary diagnostic uses a separate 50-epoch \dataset{STL10} trained TinyViT run. At each checkpoint, tokens are ordered by their first PCA coordinate, which we use as a simple one-dimensional fiber coordinate. We select anchors along this coordinate, gather the raw image patches in each anchor's local token neighborhood, and fit one shared 32-atom dictionary from the pooled patches. Each neighborhood is then coded against this same dictionary, and its sparse complexity is the mean number of atoms needed to reconstruct its patches to a fixed residual tolerance. The key control is the shared dictionary: if the required sparsity changes along the fiber coordinate, the change reflects that some regions are easier or harder for the same dictionary to represent, rather than a consequence of fitting a separate local dictionary for each region.
+\paragraph{Local sparse dictionary probe.}
+We trained TinyViT on \dataset{STL10} for 50 epochs with three seeds and evaluated the local sparse-complexity probe at epochs $0,9,19,29,39,49$. The final evaluation accuracies were 60.9\%, 61.3\%, and 62.2\%, so the run is in a partially trained regime rather than a saturated classifier regime. \Cref{tab:local-sparse} reports means across seeds.
 
 \begin{table}[H]
 \centering
-\caption{Auxiliary global-dictionary sparse probe on trained \dataset{STL10} TinyViT tokens. The neighborhood radius $\epsilon$ is chosen automatically as the median 32-nearest-neighbor radius at each checkpoint, in token-embedding Euclidean distance. TV denotes total variation of mean required sparsity along the PCA-1 fiber coordinate.}
-\begin{tabular}{rccccc}
+\scriptsize
+\caption{Local sparse dictionary probe on trained \dataset{STL10} TinyViT tokens, averaged over three seeds. $\epsilon$ is fixed within each checkpoint as the median 32-nearest-neighbor token radius. $S_i$ is the mean OMP code length needed to reconstruct local raw patches to relative residual $\tau=0.15$; $\rho$ denotes Pearson correlation and $n_i=|\mathcal{N}_i|$.}
+\begin{tabular}{@{}rccccccc@{}}
 \toprule
-Epoch & Anchors & $\epsilon$ & Mean sparsity & TV & Corr(sparsity, dim) \\
+Epoch & $\epsilon$ & Tokens & Mean $S_i$ & IQR & $\rho(S,n)$ & $\rho(S,\dimhat)$ & $\rho(S,\irr)$ \\
 \midrule
-0  & 44 & 1.84 & 14.17 & 26.52 & 0.41 \\
-9  & 48 & 3.17 & 14.31 & 65.71 & 0.41 \\
-19 & 43 & 5.16 & 13.29 & 99.34 & 0.44 \\
-29 & 46 & 5.60 & 14.44 & 61.09 & 0.37 \\
-39 & 44 & 5.94 & 13.99 & 59.58 & 0.53 \\
-49 & 43 & 5.84 & 14.48 & 57.88 & 0.39 \\
+0  & $1.95{\pm}0.30$ & 607 & $13.98{\pm}0.06$ & 1.44 & 0.70 & 0.27 & -0.04 \\
+9  & $3.69{\pm}0.21$ & 725 & $12.95{\pm}0.62$ & 3.86 & 0.73 & 0.07 & -0.07 \\
+19 & $5.54{\pm}0.32$ & 763 & $12.51{\pm}0.22$ & 4.65 & 0.74 & 0.06 & -0.07 \\
+29 & $6.83{\pm}0.74$ & 814 & $12.22{\pm}0.22$ & 5.30 & 0.72 & 0.06 & -0.13 \\
+39 & $7.42{\pm}0.64$ & 853 & $12.10{\pm}0.14$ & 5.36 & 0.77 & 0.08 & -0.12 \\
+49 & $7.56{\pm}0.70$ & 846 & $12.13{\pm}0.10$ & 5.46 & 0.76 & 0.12 & -0.12 \\
 \bottomrule
 \end{tabular}
-\label{tab:sparse-global}
+\label{tab:local-sparse}
 \end{table}
 
-The global-dictionary run shows nonconstant sparse complexity along the fiber coordinate. Mean required sparsity remains high, about 13.3--14.5 atoms, and the sparsity trajectory has substantial total variation along the sorted fiber-coordinate values. The correlation between required sparsity and local dimension is positive at every reported checkpoint, ranging from 0.37 to 0.53. This supports the interpretation that high-dimensional token neighborhoods tend to correspond to raw-patch neighborhoods that require more shared dictionary atoms to reconstruct.
+Two effects are visible. First, mean sparse complexity drops during training, from $13.98$ atoms at initialization to about $12.1$ atoms by epoch 49. The learned token geometry therefore organizes local raw-patch neighborhoods into sets that are easier for their own local dictionaries to reconstruct. Second, the distribution broadens: IQR($S_i$) grows from 1.44 to 5.46, and the 10--90\% band at epoch 49 spans roughly 7.3--15.6 atoms. Training therefore does not make the space uniformly simple. Instead, some neighborhoods become much lower-complexity while a high-complexity tail persists.
 
-\paragraph{Color encoding in the sparse-probe plots.}
-The point colors in \Cref{fig:sparse-global} are diagnostic encodings, not class labels. In the upper-right panel, color denotes mean required sparsity, matching the colorbar: brighter points require more dictionary atoms on average. In the lower two scatter plots, color denotes the number of raw patches in the anchor's $\epsilon$-ball neighborhood, using the displayed patch-count colorbars. This exposes whether an apparent relationship between local dimension, irregularity, and sparse complexity is also coupled to neighborhood support size; yellow-green points have more patches in the $\epsilon$-ball, while darker purple points have fewer. The first panel is a one-dimensional trajectory along the sorted fiber coordinate and uses a fixed line color.
+The sparse-complexity signal is not just a restatement of the volume-scaling dimension. The strongest association is with fixed-radius support size, Corr($S_i,|\mathcal{N}_i|$) $\approx 0.7$--$0.77$, while Corr($S_i,\dimhat_i$) is weak after early training and Corr($S_i,\irr_i$) is mildly negative. Thus the local dictionary probe measures a complementary notion of local structure: how many raw-patch directions are needed for reconstruction at a fixed residual threshold, conditional on a neighborhood in token space. This is compatible with a stratified interpretation because the local complexity field is heterogeneous, but it also shows that sparse complexity, local dimension, and irregularity are not interchangeable statistics.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.9\linewidth]{\figroot/sparse_global_epoch049.png}
-\caption{Sparse dictionary probe at epoch 49 for the auxiliary global-dictionary run. The first panel shows the sparsity trajectory along the PCA-1 fiber coordinate. The upper-right scatter colors anchors by mean required sparsity, while the lower dimension/sparsity and irregularity/sparsity scatters color anchors by $\epsilon$-ball patch count.}
-\label{fig:sparse-global}
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{\figroot/local_sparse_epoch049_probe.png}
+  \caption{Summary scatters}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{\figroot/local_sparse_epoch049_heatmaps.png}
+  \caption{Patch heatmaps}
+\end{subfigure}
+\caption{Representative local sparse dictionary diagnostics at epoch 49 for seed 1337. Left: the distribution of $S_i$ and its relation to support size, local dimension, irregularity, and residual error. Right: patch-level overlays of $S_i$ on source images, showing that sparse complexity varies spatially across token neighborhoods.}
+\label{fig:local-sparse}
 \end{figure}
 
-\paragraph{Geometric implication.}
-If the token space behaved like a single locally homogeneous smooth manifold with essentially constant fiber type, then movement along a smooth coordinate would not be expected to induce large changes in the sparse complexity of the corresponding raw-patch neighborhoods under one shared dictionary. The observed changes therefore provide independent evidence that the representation has nonuniform local structure. We interpret this as evidence consistent with stratification: different regions along the empirical fiber coordinate have different effective local dimension and different raw-patch reconstruction complexity. This does not prove a formal stratification theorem or identify exact stratum boundaries, but it strengthens the empirical case that the geometry is not well summarized by one globally uniform manifold model.
-
 \section{Discussion}
-Three points stand out. First, raw pixel spaces are already highly stratified, so the interesting question is not whether learned models ``break'' a smooth manifold but how they redistribute singular structure already present in the data. This is the direct image-space analogue of the observation in \citet{robinson2025token}: continuity of the coordinates does not guarantee a locally smooth or even fiber-bundle-like data geometry. Moreover, the present image-space setting is arguably finer-grained than the token-embedding setting because it probes continuous local neighborhoods and multiple patch geometries rather than only a fixed vocabulary embedding. Second, tokenization does not automatically smooth local geometry: the untrained TinyViT tokens are more irregular than matched raw pixels on average. Third, the DINOv2 comparison shows that smoothing can happen at the patch-embedding stage even when later token layers become more singular again.
+Four points stand out. First, raw pixel spaces are already highly stratified, so the interesting question is not whether learned models ``break'' a smooth manifold but how they redistribute singular structure already present in the data. This is the direct image-space analogue of the observation in \citet{robinson2025token}: continuity of the coordinates does not guarantee a locally smooth or even fiber-bundle-like data geometry. Moreover, the present image-space setting is arguably finer-grained than the token-embedding setting because it probes continuous local neighborhoods and multiple patch geometries rather than only a fixed vocabulary embedding. Second, tokenization does not automatically smooth local geometry: the untrained TinyViT tokens are more irregular than matched raw pixels on average. Third, the DINOv2 comparison shows that smoothing can happen at the patch-embedding stage even when later token layers become more singular again. Fourth, the local sparse dictionary probe shows that training can lower average raw-patch reconstruction complexity while increasing heterogeneity across token neighborhoods; this is the qualitative pattern expected from a representation that separates different local regimes rather than collapsing them to one uniform manifold chart.
 
 This interpretation is broadly aligned with recent work arguing that local neighborhood structure in learned token spaces often violates manifold-style null hypotheses \citep{robinson2025token}. The present results extend that intuition into vision and suggest that local singularity diagnostics are useful even before training or semantic supervision.
 
@@ -295,7 +326,7 @@ The completed sweep supports a simple conclusion: visual representation spaces a
 \item An anonymized supplementary bundle should include the sweep launcher, aggregation script, relevant Hydra configs, and the selected figure assets used in the main paper.
 \item The completed study consisted of 18 runs: 10 pixel/TinyViT cells and 8 pretrained-vs-pixel cells.
 \item The main paper figures in this submission source use vendored copies of representative run artifacts from the completed sweep.
-\item The auxiliary token-patch figure comes from an earlier long trained-fiber visualization run, while the sparse-fiber table and trajectory use a separate 50-epoch \dataset{STL10} trained TinyViT run with global sparse dictionary probing enabled.
+\item The auxiliary token-patch figure comes from an earlier long trained-fiber visualization run, while the local sparse dictionary table and diagnostics use a separate 50-epoch \dataset{STL10} trained TinyViT sweep over three seeds.
 \item The final public release should add an exact environment file, run logs, and the full aggregated markdown/JSON report.
 \end{itemize}
 

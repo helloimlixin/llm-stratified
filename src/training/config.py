@@ -43,11 +43,10 @@ class FiberConfig:
     sparse_probe_auto_neighbor_k: int = 32
     sparse_probe_auto_radius_quantile: float = 0.5
     sparse_probe_min_patches: int = 12
-    sparse_probe_max_anchors: int = 64
+    sparse_probe_max_anchors: Optional[int] = None
     sparse_probe_dictionary_size: int = 32
     sparse_probe_residual_threshold: float = 0.15
     sparse_probe_max_sparsity: int = 16
-    sparse_probe_global_dictionary: bool = False
 
 
 @dataclass

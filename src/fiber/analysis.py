@@ -94,11 +94,10 @@ def analyze_fiber_epoch(
     sparse_probe_auto_neighbor_k: int = 32,
     sparse_probe_auto_radius_quantile: float = 0.5,
     sparse_probe_min_patches: int = 12,
-    sparse_probe_max_anchors: int = 64,
+    sparse_probe_max_anchors: int | None = None,
     sparse_probe_dictionary_size: int = 32,
     sparse_probe_residual_threshold: float = 0.15,
     sparse_probe_max_sparsity: int = 16,
-    sparse_probe_global_dictionary: bool = False,
     wandb_module=None,
     model: torch.nn.Module | None = None,
     device: torch.device | None = None,
@@ -203,32 +202,33 @@ def analyze_fiber_epoch(
                 dictionary_size=sparse_probe_dictionary_size,
                 residual_threshold=sparse_probe_residual_threshold,
                 max_sparsity=sparse_probe_max_sparsity,
-                global_dictionary=sparse_probe_global_dictionary,
             )
             sparse_summary = sparse_probe_result.get("summary", {}) if sparse_probe_result else {}
             for key in (
                 "radius",
-                "evaluated_anchors",
+                "candidate_tokens",
+                "evaluated_tokens",
                 "mean_patch_count",
                 "mean_required_sparsity",
                 "median_required_sparsity",
                 "sparsity_std",
+                "sparsity_q10",
+                "sparsity_q90",
+                "sparsity_iqr",
                 "sparsity_range",
-                "sparsity_total_variation",
                 "corr_sparsity_patch_count",
                 "corr_sparsity_dimension",
                 "corr_sparsity_irregularity",
             ):
                 if key in sparse_summary:
                     fiber_summary[f"sparse_probe_{key}"] = sparse_summary[key]
-            dict_mode = sparse_summary.get("dictionary_mode", "local")
             print(
                 "[sparse_probe] "
-                f"anchors={sparse_summary.get('evaluated_anchors', 0)} "
+                f"tokens={sparse_summary.get('evaluated_tokens', 0)}/"
+                f"{sparse_summary.get('candidate_tokens', 0)} "
                 f"eps={float(sparse_summary.get('radius', float('nan'))):.4g} "
                 f"mean_sparsity={float(sparse_summary.get('mean_required_sparsity', float('nan'))):.3g} "
-                f"range={float(sparse_summary.get('sparsity_range', float('nan'))):.3g}"
-                f"{' [global dict]' if dict_mode == 'global' else ''}",
+                f"range={float(sparse_summary.get('sparsity_range', float('nan'))):.3g}",
                 flush=True,
             )
         except Exception as e:
@@ -469,6 +469,12 @@ def analyze_fiber_epoch(
                     log_dict["sparse_probe/summary_plot"] = wandb_module.Image(str(sparse_plot))
                 except Exception as e:
                     print(f"[wandb] skipped sparse_probe plot: {e}")
+            sparse_heatmap = sparse_summary.get("heatmap_path")
+            if sparse_heatmap:
+                try:
+                    log_dict["sparse_probe/image_heatmaps"] = wandb_module.Image(str(sparse_heatmap))
+                except Exception as e:
+                    print(f"[wandb] skipped sparse_probe heatmap: {e}")
 
         pca_image = _wandb_image_or_none(
             wandb_module=wandb_module, key="embeddings/pca_3d",

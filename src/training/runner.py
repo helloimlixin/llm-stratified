@@ -424,7 +424,6 @@ def run_training(
                         sparse_probe_dictionary_size=fiber_cfg.sparse_probe_dictionary_size,
                         sparse_probe_residual_threshold=fiber_cfg.sparse_probe_residual_threshold,
                         sparse_probe_max_sparsity=fiber_cfg.sparse_probe_max_sparsity,
-                        sparse_probe_global_dictionary=fiber_cfg.sparse_probe_global_dictionary,
                         wandb_module=wandb if wandb_on else None,
                         model=model_unwrapped,
                         device=device,

@@ -1,9 +1,10 @@
-"""Sparse dictionary probes for local fiber neighborhoods.
+"""Sparse dictionary probes for local token neighborhoods.
 
 The probe tests whether an epsilon-ball in representation space needs more or
 fewer dictionary atoms to reconstruct the corresponding raw image patches at a
-fixed residual threshold. It is intentionally lightweight: dictionaries are
-learned by local PCA and codes are found with Orthogonal Matching Pursuit.
+fixed residual threshold. Each eligible token gets its own local dictionary
+trained from the patches in its fixed-radius neighborhood; there is no global
+dictionary and no PCA coordinate used as a fiber coordinate.
 """
 
 from __future__ import annotations
@@ -58,33 +59,44 @@ def _first_dim(result: dict[str, Any] | None) -> float:
     return value if math.isfinite(value) else float("nan")
 
 
+def select_probe_tokens(
+    embeddings: torch.Tensor,
+    *,
+    max_tokens: int | None,
+) -> np.ndarray:
+    """Select token indices to probe without using a geometric projection.
+
+    ``None`` or a non-positive cap means "all tokens".  A positive cap is a
+    deterministic uniform subsample in collection order, intended only as a
+    runtime control.
+    """
+    n = int(embeddings.shape[0])
+    if n <= 0:
+        return np.empty(0, dtype=np.int64)
+    if max_tokens is None or int(max_tokens) <= 0 or int(max_tokens) >= n:
+        return np.arange(n, dtype=np.int64)
+
+    take = int(max_tokens)
+    if take == n:
+        tokens = np.arange(n, dtype=np.int64)
+    else:
+        positions = np.linspace(0, n - 1, num=take)
+        tokens = np.unique(np.round(positions).astype(np.int64))
+    return tokens.astype(np.int64)
+
+
 def select_fiber_anchors(
     embeddings: torch.Tensor,
     *,
-    max_anchors: int,
+    max_anchors: int | None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Select anchors evenly along the first PCA coordinate."""
-    n = int(embeddings.shape[0])
-    if n <= 0 or max_anchors <= 0:
-        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+    """Compatibility wrapper for older imports.
 
-    emb = embeddings.detach().float().cpu()
-    centered = emb - emb.mean(dim=0, keepdim=True)
-    rank = min(1, int(centered.shape[0]), int(centered.shape[1]))
-    if rank > 0:
-        _u, _s, v = torch.pca_lowrank(centered, q=rank)
-        coord = (centered @ v[:, :1]).squeeze(1).numpy().astype(np.float64)
-    else:
-        coord = np.zeros(n, dtype=np.float64)
-
-    order = np.argsort(coord)
-    take = min(int(max_anchors), n)
-    if take == n:
-        anchors = order
-    else:
-        positions = np.linspace(0, n - 1, num=take)
-        anchors = order[np.unique(np.round(positions).astype(np.int64))]
-    return anchors.astype(np.int64), coord
+    The returned coordinate is the token collection index, not PCA.
+    """
+    tokens = select_probe_tokens(embeddings, max_tokens=max_anchors)
+    coord = np.arange(int(embeddings.shape[0]), dtype=np.float64)
+    return tokens, coord
 
 
 def auto_radius_from_knn(
@@ -223,15 +235,11 @@ def _code_patch_matrix(
     dictionary_size: int,
     residual_threshold: float,
     max_sparsity: int,
-    global_dictionary: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> dict[str, Any] | None:
     x_std = _standardize_patch_matrix(x)
     if x_std.shape[0] < 2:
         return None
-    if global_dictionary is not None:
-        dictionary, mean = global_dictionary
-    else:
-        dictionary, mean = fit_pca_dictionary(x_std, dictionary_size=dictionary_size)
+    dictionary, mean = fit_pca_dictionary(x, dictionary_size=dictionary_size)
     if dictionary.shape[0] == 0:
         return None
 
@@ -266,50 +274,174 @@ def _code_patch_matrix(
 
 def _build_sparse_probe_plot(
     *,
-    anchors: list[dict[str, Any]],
+    tokens: list[dict[str, Any]],
     out_path: Path,
-    global_dict: bool = False,
+    residual_threshold: float,
 ) -> str | None:
-    if plt is None or not anchors:
+    if plt is None or not tokens:
         return None
 
-    coord = np.asarray([row["fiber_coord"] for row in anchors], dtype=np.float64)
-    sparsity = np.asarray([row["mean_required_sparsity"] for row in anchors], dtype=np.float64)
-    patch_count = np.asarray([row["patch_count"] for row in anchors], dtype=np.float64)
-    dims = np.asarray([row.get("dimension", np.nan) for row in anchors], dtype=np.float64)
-    irregularity = np.asarray([row.get("irregularity", np.nan) for row in anchors], dtype=np.float64)
-    order = np.argsort(coord)
+    token_index = np.asarray([row["token_index"] for row in tokens], dtype=np.float64)
+    sparsity = np.asarray([row["mean_required_sparsity"] for row in tokens], dtype=np.float64)
+    patch_count = np.asarray([row["patch_count"] for row in tokens], dtype=np.float64)
+    dims = np.asarray([row.get("dimension", np.nan) for row in tokens], dtype=np.float64)
+    irregularity = np.asarray([row.get("irregularity", np.nan) for row in tokens], dtype=np.float64)
+    mean_residual = np.asarray([row.get("mean_relative_residual", np.nan) for row in tokens], dtype=np.float64)
+    hit_ratio = np.asarray([row.get("residual_hit_ratio", np.nan) for row in tokens], dtype=np.float64)
+    order = np.argsort(token_index)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    ax0, ax1, ax2, ax3 = axes.flatten()
+    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+    ax0, ax1, ax2, ax3, ax4, ax5 = axes.flatten()
 
-    ax0.plot(coord[order], sparsity[order], "o-", color="#2f5d8a", linewidth=1.5)
-    ax0.set_xlabel("fiber coordinate (PCA-1)")
-    ax0.set_ylabel("mean required sparsity")
-    ax0.set_title("Sparsity Along the Fiber Coordinate (global dict)" if global_dict else "Sparsity Along the Fiber Coordinate (local dict)")
+    finite_sparsity = sparsity[np.isfinite(sparsity)]
+    if finite_sparsity.size:
+        bins = min(24, max(6, int(np.sqrt(finite_sparsity.size))))
+        ax0.hist(finite_sparsity, bins=bins, color="#456990", edgecolor="white", linewidth=0.5)
+    ax0.set_xlabel("mean required sparsity")
+    ax0.set_ylabel("token neighborhoods")
+    ax0.set_title("Local Sparse Complexity")
     ax0.grid(alpha=0.25)
 
-    scatter = ax1.scatter(coord, patch_count, c=sparsity, cmap="magma", s=45, edgecolors="none")
-    plt.colorbar(scatter, ax=ax1, fraction=0.046, pad=0.04, label="mean sparsity")
-    ax1.set_xlabel("fiber coordinate (PCA-1)")
-    ax1.set_ylabel("epsilon-ball patch count")
-    ax1.set_title("Patch Count and Sparse Complexity")
+    ax1.plot(token_index[order], sparsity[order], ".", color="#2f5d8a", markersize=5)
+    ax1.set_xlabel("token index (collection order)")
+    ax1.set_ylabel("mean required sparsity")
+    ax1.set_title("Per-Token Local Dictionaries")
+    ax1.grid(alpha=0.25)
 
-    scatter_dim = ax2.scatter(dims, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
-    plt.colorbar(scatter_dim, ax=ax2, fraction=0.046, pad=0.04, label="patch count")
-    ax2.set_xlabel("local dimension")
+    scatter_count = ax2.scatter(patch_count, sparsity, c=hit_ratio, cmap="viridis", s=32, edgecolors="none")
+    plt.colorbar(scatter_count, ax=ax2, fraction=0.046, pad=0.04, label="residual hit ratio")
+    ax2.set_xlabel("fixed-radius patch count")
     ax2.set_ylabel("mean required sparsity")
-    ax2.set_title("Local Dimension vs Sparse Complexity")
+    ax2.set_title("Neighborhood Size vs Sparsity")
     ax2.grid(alpha=0.25)
 
-    scatter_irr = ax3.scatter(irregularity, sparsity, c=patch_count, cmap="viridis", s=45, edgecolors="none")
-    plt.colorbar(scatter_irr, ax=ax3, fraction=0.046, pad=0.04, label="patch count")
-    ax3.set_xlabel("-log10(min p-value)")
+    scatter_dim = ax3.scatter(dims, sparsity, c=patch_count, cmap="plasma", s=32, edgecolors="none")
+    plt.colorbar(scatter_dim, ax=ax3, fraction=0.046, pad=0.04, label="patch count")
+    ax3.set_xlabel("local volume dimension")
     ax3.set_ylabel("mean required sparsity")
-    ax3.set_title("Irregularity vs Sparse Complexity")
+    ax3.set_title("Dimension vs Sparse Complexity")
     ax3.grid(alpha=0.25)
 
+    scatter_irr = ax4.scatter(irregularity, sparsity, c=patch_count, cmap="plasma", s=32, edgecolors="none")
+    plt.colorbar(scatter_irr, ax=ax4, fraction=0.046, pad=0.04, label="patch count")
+    ax4.set_xlabel("-log10(min p-value)")
+    ax4.set_ylabel("mean required sparsity")
+    ax4.set_title("Irregularity vs Sparse Complexity")
+    ax4.grid(alpha=0.25)
+
+    scatter_res = ax5.scatter(mean_residual, sparsity, c=hit_ratio, cmap="viridis", s=32, edgecolors="none")
+    plt.colorbar(scatter_res, ax=ax5, fraction=0.046, pad=0.04, label="residual hit ratio")
+    ax5.axvline(float(residual_threshold), color="#c44e52", linewidth=1.0, linestyle="--")
+    ax5.set_xlabel("mean relative residual")
+    ax5.set_ylabel("mean required sparsity")
+    ax5.set_title("Residual Target Check")
+    ax5.grid(alpha=0.25)
+
     fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return str(out_path)
+
+
+def _image_to_display_array(image: torch.Tensor) -> np.ndarray:
+    img = image.detach().float().cpu()
+    if img.ndim != 3:
+        return np.zeros((1, 1, 3), dtype=np.float32)
+    arr = img.numpy()
+    if arr.shape[0] == 1:
+        arr = np.repeat(arr, 3, axis=0)
+    elif arr.shape[0] > 3:
+        arr = arr[:3]
+    arr = np.transpose(arr, (1, 2, 0))
+    lo, hi = np.nanpercentile(arr, [1, 99])
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        lo, hi = float(np.nanmin(arr)), float(np.nanmax(arr))
+    if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+        arr = (arr - lo) / (hi - lo)
+    return np.clip(arr, 0.0, 1.0).astype(np.float32)
+
+
+def _build_sparse_probe_heatmaps(
+    *,
+    tokens: list[dict[str, Any]],
+    images: torch.Tensor,
+    image_ids: torch.Tensor,
+    bboxes: torch.Tensor,
+    out_path: Path,
+    max_images: int = 8,
+) -> str | None:
+    if plt is None or not tokens or images.numel() == 0:
+        return None
+
+    ids = image_ids.detach().cpu().long()
+    boxes = bboxes.detach().cpu().float()
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in tokens:
+        token_idx = int(row["token_index"])
+        if token_idx < 0 or token_idx >= int(ids.numel()):
+            continue
+        image_idx = int(ids[token_idx])
+        if image_idx < 0 or image_idx >= int(images.shape[0]):
+            continue
+        grouped.setdefault(image_idx, []).append(row)
+
+    if not grouped:
+        return None
+
+    def _score(items: list[dict[str, Any]]) -> tuple[float, int]:
+        values = np.asarray([row["mean_required_sparsity"] for row in items], dtype=np.float64)
+        values = values[np.isfinite(values)]
+        spread = float(np.nanmax(values) - np.nanmin(values)) if values.size else 0.0
+        return spread, len(items)
+
+    selected = sorted(grouped, key=lambda idx: _score(grouped[idx]), reverse=True)[: max(1, int(max_images))]
+    all_values = np.asarray(
+        [row["mean_required_sparsity"] for idx in selected for row in grouped[idx]],
+        dtype=np.float64,
+    )
+    all_values = all_values[np.isfinite(all_values)]
+    if all_values.size == 0:
+        return None
+    vmin = float(np.nanmin(all_values))
+    vmax = float(np.nanmax(all_values))
+    if not math.isfinite(vmin) or not math.isfinite(vmax) or vmax <= vmin:
+        vmax = vmin + 1.0
+
+    cols = min(4, len(selected))
+    rows_n = int(math.ceil(len(selected) / cols))
+    fig, axes = plt.subplots(rows_n, cols, figsize=(4.0 * cols, 4.0 * rows_n), squeeze=False)
+    cmap = plt.get_cmap("magma")
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+    for ax, image_idx in zip(axes.flatten(), selected):
+        ax.imshow(_image_to_display_array(images[image_idx]))
+        ax.set_title(f"image {image_idx}  tokens={len(grouped[image_idx])}", fontsize=9)
+        ax.axis("off")
+        for row in grouped[image_idx]:
+            token_idx = int(row["token_index"])
+            if token_idx < 0 or token_idx >= int(boxes.shape[0]):
+                continue
+            x0, y0, x1, y1 = [float(v) for v in boxes[token_idx].tolist()]
+            width = max(1.0, x1 - x0)
+            height = max(1.0, y1 - y0)
+            color = cmap(norm(float(row["mean_required_sparsity"])))
+            rect = plt.Rectangle(
+                (x0, y0),
+                width,
+                height,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.8,
+                alpha=0.45,
+            )
+            ax.add_patch(rect)
+
+    for ax in axes.flatten()[len(selected):]:
+        ax.axis("off")
+
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    fig.colorbar(sm, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02, label="mean required sparsity")
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return str(out_path)
@@ -330,20 +462,12 @@ def run_sparse_dictionary_probe(
     auto_neighbor_k: int = 32,
     auto_radius_quantile: float = 0.5,
     min_patches: int = 12,
-    max_anchors: int = 64,
+    max_anchors: int | None = None,
     dictionary_size: int = 32,
     residual_threshold: float = 0.15,
     max_sparsity: int = 16,
-    global_dictionary: bool = False,
 ) -> dict[str, Any]:
-    """Run local dictionary/OMP sparse complexity probe over fiber neighborhoods.
-
-    When *global_dictionary* is True a single PCA dictionary is learned from
-    **all** collected patches and reused at every anchor.  Sparsity variation
-    along the fiber coordinate then reflects genuine structural complexity
-    differences rather than dictionary quality differences -- a cleaner test
-    of the stratified manifold hypothesis.
-    """
+    """Run local dictionary/OMP sparse complexity probe over token neighborhoods."""
     out_dir.mkdir(parents=True, exist_ok=True)
     dists_np = np.asarray(dists, dtype=np.float64)
     valid_radius = radius is not None and math.isfinite(float(radius)) and float(radius) > 0
@@ -353,16 +477,16 @@ def run_sparse_dictionary_probe(
         else auto_radius_from_knn(dists_np, neighbor_k=auto_neighbor_k, quantile=auto_radius_quantile)
     )
     radius_source = "configured" if valid_radius else "auto_knn"
-    anchors_idx, fiber_coord = select_fiber_anchors(embeddings, max_anchors=max_anchors)
+    probe_tokens = select_probe_tokens(embeddings, max_tokens=max_anchors)
 
-    # -- collect per-anchor neighborhoods and their patches -----------------
-    anchor_neighborhoods: list[tuple[int, np.ndarray, np.ndarray]] = []
-    all_patch_blocks: list[np.ndarray] = []
-    for anchor in anchors_idx.tolist():
-        if anchor < 0 or anchor >= dists_np.shape[0] or not math.isfinite(epsilon):
+    token_neighborhoods: list[tuple[int, np.ndarray, np.ndarray]] = []
+    skipped_small_neighborhoods = 0
+    for token_idx in probe_tokens.tolist():
+        if token_idx < 0 or token_idx >= dists_np.shape[0] or not math.isfinite(epsilon):
             continue
-        neigh = np.flatnonzero(np.isfinite(dists_np[anchor]) & (dists_np[anchor] <= epsilon))
+        neigh = np.flatnonzero(np.isfinite(dists_np[token_idx]) & (dists_np[token_idx] <= epsilon))
         if neigh.size < int(min_patches):
+            skipped_small_neighborhoods += 1
             continue
         patches = extract_patch_vectors(
             images=images,
@@ -373,37 +497,25 @@ def run_sparse_dictionary_probe(
         )
         if patches.shape[0] < 2:
             continue
-        anchor_neighborhoods.append((anchor, neigh, patches))
-        if global_dictionary:
-            all_patch_blocks.append(patches)
+        token_neighborhoods.append((token_idx, neigh, patches))
 
-    # -- fit global dictionary if requested ---------------------------------
-    shared_dict: tuple[np.ndarray, np.ndarray] | None = None
-    if global_dictionary and all_patch_blocks:
-        all_patches = np.concatenate(all_patch_blocks, axis=0)
-        all_std = _standardize_patch_matrix(all_patches)
-        if all_std.shape[0] >= 2:
-            shared_dict = fit_pca_dictionary(all_std, dictionary_size=dictionary_size)
-
-    # -- code each anchor's neighborhood ------------------------------------
     rows: list[dict[str, Any]] = []
-    for anchor, neigh, patches in anchor_neighborhoods:
+    for token_idx, neigh, patches in token_neighborhoods:
         coded = _code_patch_matrix(
             patches,
             dictionary_size=dictionary_size,
             residual_threshold=residual_threshold,
             max_sparsity=max_sparsity,
-            global_dictionary=shared_dict,
         )
         if coded is None:
             continue
 
-        res = fiber_results[anchor] if anchor < len(fiber_results) else {}
+        res = fiber_results[token_idx] if token_idx < len(fiber_results) else {}
         min_p = _min_pvalue(res)
         irregularity = -math.log10(min_p + 1e-12) if math.isfinite(min_p) else float("nan")
         rows.append({
-            "anchor": int(anchor),
-            "fiber_coord": float(fiber_coord[anchor]) if anchor < fiber_coord.size else float("nan"),
+            "token_index": int(token_idx),
+            "anchor": int(token_idx),
             "patch_count": int(neigh.size),
             "dimension": _first_dim(res),
             "min_pvalue": min_p,
@@ -415,20 +527,27 @@ def run_sparse_dictionary_probe(
     patch_counts = np.asarray([row["patch_count"] for row in rows], dtype=np.float64)
     dims = np.asarray([row["dimension"] for row in rows], dtype=np.float64)
     irregularity = np.asarray([row["irregularity"] for row in rows], dtype=np.float64)
-    coords = np.asarray([row["fiber_coord"] for row in rows], dtype=np.float64)
-    order = np.argsort(coords) if coords.size else np.empty(0, dtype=np.int64)
-    sorted_sparsity = mean_sparsity[order] if order.size else np.empty(0, dtype=np.float64)
-    finite_sorted = sorted_sparsity[np.isfinite(sorted_sparsity)]
+    finite_sparsity = mean_sparsity[np.isfinite(mean_sparsity)]
+    sparsity_quantiles = (
+        np.nanquantile(finite_sparsity, [0.10, 0.25, 0.75, 0.90])
+        if finite_sparsity.size
+        else np.asarray([np.nan, np.nan, np.nan, np.nan], dtype=np.float64)
+    )
+    requested_tokens = None if max_anchors is None or int(max_anchors) <= 0 else int(max_anchors)
 
     summary: dict[str, Any] = {
         "epoch": int(epoch),
         "enabled": True,
-        "dictionary_mode": "global" if global_dictionary else "local",
+        "dictionary_mode": "local",
         "radius": float(epsilon) if math.isfinite(epsilon) else float("nan"),
         "radius_source": radius_source,
         "auto_neighbor_k": int(auto_neighbor_k),
         "auto_radius_quantile": float(auto_radius_quantile),
-        "requested_anchors": int(max_anchors),
+        "candidate_tokens": int(embeddings.shape[0]),
+        "requested_tokens": requested_tokens,
+        "evaluated_tokens": int(len(rows)),
+        "skipped_small_neighborhoods": int(skipped_small_neighborhoods),
+        "requested_anchors": requested_tokens,
         "evaluated_anchors": int(len(rows)),
         "min_patches": int(min_patches),
         "dictionary_size": int(dictionary_size),
@@ -438,13 +557,13 @@ def run_sparse_dictionary_probe(
         "mean_required_sparsity": float(np.nanmean(mean_sparsity)) if mean_sparsity.size else float("nan"),
         "median_required_sparsity": float(np.nanmedian(mean_sparsity)) if mean_sparsity.size else float("nan"),
         "sparsity_std": float(np.nanstd(mean_sparsity)) if mean_sparsity.size else float("nan"),
+        "sparsity_q10": float(sparsity_quantiles[0]),
+        "sparsity_q90": float(sparsity_quantiles[3]),
+        "sparsity_iqr": float(sparsity_quantiles[2] - sparsity_quantiles[1]),
         "sparsity_range": (
             float(np.nanmax(mean_sparsity) - np.nanmin(mean_sparsity))
             if mean_sparsity.size and np.any(np.isfinite(mean_sparsity))
             else float("nan")
-        ),
-        "sparsity_total_variation": (
-            float(np.nansum(np.abs(np.diff(finite_sorted)))) if finite_sorted.size >= 2 else float("nan")
         ),
         "corr_sparsity_patch_count": _finite_corr(mean_sparsity, patch_counts),
         "corr_sparsity_dimension": _finite_corr(mean_sparsity, dims),
@@ -452,16 +571,25 @@ def run_sparse_dictionary_probe(
     }
 
     plot_path = _build_sparse_probe_plot(
-        anchors=rows,
+        tokens=rows,
         out_path=out_dir / f"epoch_{epoch:03d}_sparse_dictionary_probe.png",
-        global_dict=global_dictionary,
+        residual_threshold=residual_threshold,
     )
     if plot_path:
         summary["plot_path"] = plot_path
+    heatmap_path = _build_sparse_probe_heatmaps(
+        tokens=rows,
+        images=images,
+        image_ids=image_ids,
+        bboxes=bboxes,
+        out_path=out_dir / f"epoch_{epoch:03d}_sparse_dictionary_heatmaps.png",
+    )
+    if heatmap_path:
+        summary["heatmap_path"] = heatmap_path
 
     output_path = out_dir / f"epoch_{epoch:03d}_sparse_dictionary_probe.json"
     summary["json_path"] = str(output_path)
-    payload = {"summary": summary, "anchors": rows}
+    payload = {"summary": summary, "tokens": rows, "anchors": rows}
     with open(output_path, "w") as fp:
         json.dump(to_serializable(payload), fp, indent=2)
     return payload

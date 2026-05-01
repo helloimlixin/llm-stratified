@@ -13,6 +13,7 @@ from fiber.sparse_probe import (
     auto_radius_from_knn,
     omp_required_sparsity,
     run_sparse_dictionary_probe,
+    select_probe_tokens,
 )
 
 
@@ -45,6 +46,15 @@ class TestSparseDictionaryProbe(unittest.TestCase):
 
         self.assertEqual(sparsity, 2)
         self.assertLessEqual(residual, 1e-8)
+
+    def test_select_probe_tokens_defaults_to_all_tokens(self):
+        embeddings = torch.randn(7, 3)
+
+        all_tokens = select_probe_tokens(embeddings, max_tokens=None)
+        capped_tokens = select_probe_tokens(embeddings, max_tokens=3)
+
+        np.testing.assert_array_equal(all_tokens, np.arange(7))
+        np.testing.assert_array_equal(capped_tokens, np.array([0, 3, 6]))
 
     def test_run_sparse_dictionary_probe_writes_summary(self):
         embeddings = torch.tensor(
@@ -94,9 +104,17 @@ class TestSparseDictionaryProbe(unittest.TestCase):
             json_path = Path(summary["json_path"])
 
             self.assertTrue(json_path.exists())
+            self.assertEqual(summary["dictionary_mode"], "local")
+            self.assertEqual(summary["candidate_tokens"], 8)
             self.assertGreaterEqual(summary["evaluated_anchors"], 2)
+            self.assertGreaterEqual(summary["evaluated_tokens"], 2)
             self.assertGreater(summary["mean_patch_count"], 0)
             self.assertGreaterEqual(summary["mean_required_sparsity"], 0)
+            self.assertIn("tokens", result)
+            self.assertNotIn("fiber_coord", result["tokens"][0])
+            for artifact_key in ("plot_path", "heatmap_path"):
+                if artifact_key in summary:
+                    self.assertTrue(Path(summary[artifact_key]).exists())
 
 
 if __name__ == "__main__":

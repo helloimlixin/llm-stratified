@@ -52,6 +52,7 @@ _EXPORTS = {
     "select_irregular_tokens": "fiber.plots",
     "select_polysemy_entropy_images": "fiber.polysemy",
     "select_fiber_anchors": "fiber.sparse_probe",
+    "select_probe_tokens": "fiber.sparse_probe",
     "select_singular_token_indices": "fiber.plots",
     "select_singular_tokens": "fiber.plots",
     "sorted_distance_matrix": "fiber.geometry",
