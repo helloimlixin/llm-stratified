@@ -177,7 +177,17 @@ python src/train.py +experiment=coco_fiber_smoke data.root=/scratch/$USER/data
 
 # Larger starter run on real COCO
 python src/train.py +experiment=coco_fiber data.root=/scratch/$USER/data
+
+# Pretrained SAM ViT COCO object/segmentation probe
+python src/train.py +experiment=coco_sam_fiber data.root=/scratch/$USER/data
 ```
+
+The SAM preset uses COCO instance boxes as object prompts, generates SAM masks,
+pools frozen ViT image-encoder features onto an analysis patch grid, runs the
+fiber-bundle tests on those token embeddings, and runs local OMP/IHT sparse
+dictionary probes over the corresponding raw patches. Outputs include
+`token_processing_notes.md`, mask/patch-grid overlays, sparse-complexity plots,
+and per-image sparsity heatmaps.
 
 For COCO specifically, `data.num_workers=0` is the safest default in this repo.
 The dataset wrapper keeps a large in-memory annotation object, so worker startup can be slow or stall on small/debug runs.

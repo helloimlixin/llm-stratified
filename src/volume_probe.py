@@ -296,7 +296,7 @@ def _project_embeddings_2d(
     return sample_idx, coords[:, :2].numpy()
 
 
-def _scatter_metric(ax, coords: np.ndarray, values: np.ndarray, *, title: str, cmap: str) -> None:
+def _scatter_metric(ax, coords: np.ndarray, values: np.ndarray, *, title: str, cmap: str, colorbar_label: str) -> None:
     finite = np.isfinite(values)
     if np.any(~finite):
         ax.scatter(
@@ -317,10 +317,11 @@ def _scatter_metric(ax, coords: np.ndarray, values: np.ndarray, *, title: str, c
             alpha=0.85,
             linewidths=0,
         )
-        plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+        plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04, label=colorbar_label)
     ax.set_title(title)
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
+    ax.grid(alpha=0.20, linewidth=0.5)
 
 
 def _save_patch_nn_grid(
@@ -407,7 +408,8 @@ def _save_representation_dashboard(
         ax_dim_hist.hist(finite_dims, bins=min(30, max(8, int(np.sqrt(finite_dims.size)))), color="#2f5d8a", alpha=0.9)
     ax_dim_hist.set_title("Local Dimension Distribution")
     ax_dim_hist.set_xlabel("estimated dimension")
-    ax_dim_hist.set_ylabel("count")
+    ax_dim_hist.set_ylabel("token / patch count")
+    ax_dim_hist.grid(alpha=0.20, linewidth=0.5)
 
     if finite_irregularity.size:
         ax_irr_hist.hist(
@@ -420,14 +422,16 @@ def _save_representation_dashboard(
     total = int(np.sum(np.isfinite(min_pvalues)))
     ax_irr_hist.set_title(f"Irregularity Distribution ({rejected}/{total} rejected)")
     ax_irr_hist.set_xlabel("-log10(min p-value)")
-    ax_irr_hist.set_ylabel("count")
+    ax_irr_hist.set_ylabel("token / patch count")
+    ax_irr_hist.grid(alpha=0.20, linewidth=0.5)
 
     _scatter_metric(
         ax_irr_scatter,
         coords,
         irregularity[sample_idx],
-        title="PCA Projection Colored by Irregularity",
+        title="PCA Projection Colored by Fiber-Test Irregularity",
         cmap="magma",
+        colorbar_label="-log10(min p-value)",
     )
     _scatter_metric(
         ax_dim_scatter,
@@ -435,10 +439,11 @@ def _save_representation_dashboard(
         dims[sample_idx],
         title="PCA Projection Colored by Local Dimension",
         cmap="viridis",
+        colorbar_label="estimated local dimension",
     )
 
     fig.suptitle(
-        "mean_dim="
+        "Volume Probe Dashboard: mean_dim="
         f"{summary.get('mean_dim', float('nan')):.2f}, "
         "irregular_ratio="
         f"{summary.get('irregular_ratio', float('nan')):.3f}",
@@ -492,13 +497,13 @@ def _save_scaling_curves_figure(
             title += f" | p={min_p:.2e}"
         ax.set_title(title, fontsize=10)
         ax.set_xlabel("log10(radius)")
-        ax.set_ylabel("log10(k)")
+        ax.set_ylabel("log10(neighbor count k)")
         ax.grid(alpha=0.25)
 
     for ax in axes.flatten()[anchor_idx.size :]:
         ax.axis("off")
 
-    fig.suptitle("Local Volume Scaling Curves", fontsize=12)
+    fig.suptitle("Local Volume Scaling Curves: Slope Estimates Local Dimension", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)

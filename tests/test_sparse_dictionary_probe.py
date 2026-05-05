@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fiber.sparse_probe import (
     auto_radius_from_knn,
+    iht_required_sparsity,
     omp_required_sparsity,
     run_sparse_dictionary_probe,
     select_probe_tokens,
@@ -46,6 +47,21 @@ class TestSparseDictionaryProbe(unittest.TestCase):
 
         self.assertEqual(sparsity, 2)
         self.assertLessEqual(residual, 1e-8)
+
+    def test_iht_required_sparsity_hits_identity_dictionary_solution(self):
+        dictionary = np.eye(3, dtype=np.float64)
+        target = np.array([1.0, 1.0, 0.0], dtype=np.float64)
+
+        sparsity, residual = iht_required_sparsity(
+            target,
+            dictionary,
+            residual_threshold=1e-6,
+            max_sparsity=3,
+            steps=30,
+        )
+
+        self.assertEqual(sparsity, 2)
+        self.assertLessEqual(residual, 1e-6)
 
     def test_select_probe_tokens_defaults_to_all_tokens(self):
         embeddings = torch.randn(7, 3)
@@ -99,12 +115,16 @@ class TestSparseDictionaryProbe(unittest.TestCase):
                 dictionary_size=3,
                 residual_threshold=0.5,
                 max_sparsity=3,
+                algorithm="iht",
+                iht_steps=20,
+                heatmap_max_images=2,
             )
             summary = result["summary"]
             json_path = Path(summary["json_path"])
 
             self.assertTrue(json_path.exists())
             self.assertEqual(summary["dictionary_mode"], "local")
+            self.assertEqual(summary["coding_algorithm"], "iht")
             self.assertEqual(summary["candidate_tokens"], 8)
             self.assertGreaterEqual(summary["evaluated_anchors"], 2)
             self.assertGreaterEqual(summary["evaluated_tokens"], 2)

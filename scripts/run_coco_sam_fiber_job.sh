@@ -22,6 +22,10 @@ MAX_TOKENS="${MAX_TOKENS:-1536}"
 SAM_MODEL="${SAM_MODEL:-facebook/sam-vit-base}"
 ANALYSIS_PATCH_SIZE="${ANALYSIS_PATCH_SIZE:-16}"
 MAX_BOXES_PER_IMAGE="${MAX_BOXES_PER_IMAGE:-16}"
+SPARSE_PROBE_ALGORITHM="${SPARSE_PROBE_ALGORITHM:-omp}"
+SPARSE_PROBE_RESIDUAL_THRESHOLD="${SPARSE_PROBE_RESIDUAL_THRESHOLD:-0.15}"
+SPARSE_PROBE_MAX_ANCHORS="${SPARSE_PROBE_MAX_ANCHORS:-null}"
+SPARSE_PROBE_HEATMAP_IMAGES="${SPARSE_PROBE_HEATMAP_IMAGES:-8}"
 
 if [[ ! -d "$DATA_ROOT" ]]; then
   echo "Missing data root: $DATA_ROOT" >&2
@@ -116,6 +120,10 @@ CMD=(
   "sam_fiber.model_name=$SAM_MODEL"
   "sam_fiber.analysis_patch_size=$ANALYSIS_PATCH_SIZE"
   "sam_fiber.max_boxes_per_image=$MAX_BOXES_PER_IMAGE"
+  "sam_fiber.sparse_probe_algorithm=$SPARSE_PROBE_ALGORITHM"
+  "sam_fiber.sparse_probe_residual_threshold=$SPARSE_PROBE_RESIDUAL_THRESHOLD"
+  "sam_fiber.sparse_probe_max_anchors=$SPARSE_PROBE_MAX_ANCHORS"
+  "sam_fiber.sparse_probe_heatmap_images=$SPARSE_PROBE_HEATMAP_IMAGES"
   "wandb.enabled=true"
   "wandb.project=$WANDB_PROJECT"
   "wandb.name=$WANDB_RUN_NAME"

@@ -161,13 +161,14 @@ def _overlay_masks(
     image: torch.Tensor,
     masks: list[torch.Tensor],
     boxes: list[tuple[float, float, float, float, int]],
+    grid_h: int | None = None,
+    grid_w: int | None = None,
 ) -> Image.Image | None:
     if Image is None or ImageDraw is None:
         return None
     image_np = (image.permute(1, 2, 0).clamp(0, 1).numpy() * 255.0).astype(np.uint8)
     base = Image.fromarray(image_np).convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
     palette = _mask_preview_palette()
     for idx, (mask, box) in enumerate(zip(masks, boxes)):
         mask_t = torch.as_tensor(mask, dtype=torch.float32).squeeze()
@@ -181,8 +182,20 @@ def _overlay_masks(
         alpha[..., 3] = (mask_t.clamp(0, 1).numpy() * 96.0).astype(np.uint8)
         mask_image = Image.fromarray(alpha, mode="RGBA").resize(base.size, resample=getattr(Image, "Resampling", Image).BILINEAR)
         overlay = Image.alpha_composite(overlay, mask_image)
+    draw = ImageDraw.Draw(overlay)
+    for idx, box in enumerate(boxes):
+        color = palette[idx % len(palette)]
         x0, y0, x1, y1, _cat = box
         draw.rectangle((x0, y0, x1, y1), outline=color + (255,), width=2)
+    if grid_h is not None and grid_w is not None and grid_h > 0 and grid_w > 0:
+        width, height = base.size
+        grid_color = (255, 255, 255, 90)
+        for col in range(1, int(grid_w)):
+            x = int(round(width * col / float(grid_w)))
+            draw.line((x, 0, x, height), fill=grid_color, width=1)
+        for row in range(1, int(grid_h)):
+            y = int(round(height * row / float(grid_h)))
+            draw.line((0, y, width, y), fill=grid_color, width=1)
     return Image.alpha_composite(base, overlay).convert("RGB")
 
 
@@ -342,6 +355,97 @@ def _preview_epoch_summary(
     }
 
 
+def _fmt_percent(value: Any) -> str:
+    try:
+        value_f = float(value)
+    except Exception:
+        return "n/a"
+    if not np.isfinite(value_f):
+        return "n/a"
+    return f"{value_f:.0%}"
+
+
+def _wandb_image_with_caption(wandb, image: Any, caption: str):
+    try:
+        return wandb.Image(image, caption=caption)
+    except TypeError:
+        return wandb.Image(image)
+
+
+def _segmentation_epoch_caption(
+    *,
+    epoch: int,
+    summary: dict[str, Any],
+    model_name: str,
+    dataset_name: str,
+) -> str:
+    union = float(summary.get("avg_union_mask_fraction", float("nan")))
+    prompt = float(summary.get("avg_prompt_box_fraction", float("nan")))
+    top_classes = str(summary.get("top_classes") or "n/a")
+    if np.isfinite(union) and union >= 0.45:
+        coverage_text = "SAM masks cover a large fraction of the preview images, so object labels should be visually easy to audit but may also include broad object/background regions."
+    elif np.isfinite(union) and union >= 0.15:
+        coverage_text = "SAM masks provide moderate object coverage, which is usually enough to inspect object-aligned patch labels while leaving substantial background context."
+    elif np.isfinite(union):
+        coverage_text = "SAM masks are sparse in this preview, so downstream patch-label conclusions should be read cautiously because many tokens may mostly see background."
+    else:
+        coverage_text = "Mask coverage could not be summarized reliably for this preview."
+    return (
+        f"Epoch {epoch} {dataset_name} segmentation preview for {model_name}. The overlays show COCO box prompts, thresholded SAM masks, and the analysis patch grid used to assign patch-token labels. "
+        f"Conclusion: {coverage_text} Average prompt-box coverage is {_fmt_percent(prompt)} and average thresholded mask coverage is {_fmt_percent(union)}. The most frequent prompted classes are {top_classes}; repeated or overlapping boxes can make prompt coverage exceed 100%."
+    )
+
+
+def _embedding_animation_caption(*, dataset_name: str, frames: int) -> str:
+    return (
+        f"{dataset_name} embedding progression animation. Each frame is an epoch-level projection of collected token embeddings colored by label or dimension, depending on the animation builder. "
+        f"Conclusion: use this video to judge whether geometry changes smoothly over epochs or whether clusters, gaps, and high-dimension regions appear abruptly. This run contains {frames} frame(s), so a one-frame video should be treated as a static diagnostic rather than a temporal trend."
+    )
+
+
+def _write_token_processing_notes(
+    *,
+    output_dir: Path,
+    config: dict[str, Any],
+    model: SamBackboneWrapper,
+) -> None:
+    """Write a compact note describing how pretrained COCO tokens are produced."""
+    processor_size = int(getattr(model, "expected_image_size", config.get("img_size", 0) or 0))
+    encoder_patch = int(getattr(model, "patch_size", 0) or 0)
+    analysis_patch = int(config.get("analysis_patch_size", 0) or 0)
+    embed_dim = int(getattr(model, "embed_dim", 0) or 0)
+    payload = {
+        "pipeline": "coco_pretrained_sam_vit",
+        "model": config.get("sam_model"),
+        "processor_image_size": processor_size,
+        "encoder_patch_size": encoder_patch,
+        "analysis_patch_size": analysis_patch,
+        "embedding_dim": embed_dim,
+        "token_source": "SAM ViT image encoder feature map pooled onto the requested analysis patch grid",
+        "object_source": "COCO instance boxes are used as object prompts for SAM mask prediction",
+        "sparse_probe": {
+            "enabled": bool(config.get("sparse_probe")),
+            "algorithm": config.get("sparse_probe_algorithm"),
+            "residual_threshold": config.get("sparse_probe_residual_threshold"),
+            "dictionary_size": config.get("sparse_probe_dictionary_size"),
+            "max_sparsity": config.get("sparse_probe_max_sparsity"),
+        },
+    }
+    with open(output_dir / "token_processing_summary.json", "w") as fp:
+        json.dump(to_serializable(payload), fp, indent=2)
+    with open(output_dir / "token_processing_notes.md", "w") as fp:
+        fp.write("# Pretrained COCO Token Pipeline\n\n")
+        fp.write(f"- Model: `{payload['model']}`\n")
+        fp.write(f"- Processor image size: `{processor_size}`\n")
+        fp.write(f"- ViT encoder patch size: `{encoder_patch}`\n")
+        fp.write(f"- Analysis patch size: `{analysis_patch}`\n")
+        fp.write(f"- Token dimension: `{embed_dim}`\n")
+        fp.write("- Token generation: denormalized COCO images are processed by the SAM image processor, encoded by the frozen ViT image encoder, and the encoder feature map is adaptively pooled onto the analysis patch grid.\n")
+        fp.write("- Object/segmentation signal: COCO instance boxes prompt SAM mask prediction; thresholded masks assign multi-hot object labels to patch-grid tokens.\n")
+        fp.write("- Fiber analysis: local kNN volume scaling estimates token-level dimension and change-point irregularity.\n")
+        fp.write("- Sparse probe: each eligible token neighborhood fits a local PCA dictionary over raw image patches and measures the sparsity needed to satisfy the configured residual target.\n")
+
+
 @torch.no_grad()
 def collect_sam_patch_tokens(
     *,
@@ -385,6 +489,8 @@ def collect_sam_patch_tokens(
             label = batch_labels[item_idx]
             ds_idx_raw = batch_indices[item_idx]
             ds_idx = int(ds_idx_raw.item()) if isinstance(ds_idx_raw, torch.Tensor) else int(ds_idx_raw)
+            image_buffer_idx = len(images)
+            images.append(img.detach().cpu())
 
             inputs, img01 = model.prepare_single_image(img, dataset, device=device)
             embedding_map = model.get_image_embedding_map(inputs["pixel_values"])
@@ -448,6 +554,9 @@ def collect_sam_patch_tokens(
                         "boxes": prompt_boxes_raw,
                         "masks": [mask.detach().cpu() for mask in masks],
                         "image_id": ds_idx,
+                        "grid_h": grid_h,
+                        "grid_w": grid_w,
+                        "analysis_patch_size": int(analysis_patch_size),
                         "categories": prompt_cats,
                     }
                 )
@@ -461,10 +570,9 @@ def collect_sam_patch_tokens(
                     patch_pred = int(torch.argmax(patch_label).item())
                 embeddings.append(pooled_tokens[patch_id])
                 labels.append(patch_label.to(dtype=torch.float32))
-                images.append(img.detach().cpu())
                 bboxes.append(grid_boxes[patch_id])
                 patch_indices.append(torch.tensor(patch_id, dtype=torch.int32))
-                image_ids.append(torch.tensor(ds_idx, dtype=torch.int32))
+                image_ids.append(torch.tensor(image_buffer_idx, dtype=torch.int32))
                 pred_labels.append(torch.tensor(patch_pred, dtype=torch.int64))
                 collected += 1
 
@@ -556,6 +664,19 @@ def run_sam_fiber_job(
         "mask_threshold": sam_cfg.mask_threshold,
         "max_boxes_per_image": sam_cfg.max_boxes_per_image,
         "multimask_output": bool(sam_cfg.multimask_output),
+        "sparse_probe": bool(sam_cfg.sparse_probe),
+        "sparse_probe_radius": sam_cfg.sparse_probe_radius,
+        "sparse_probe_auto_neighbor_k": sam_cfg.sparse_probe_auto_neighbor_k,
+        "sparse_probe_auto_radius_quantile": sam_cfg.sparse_probe_auto_radius_quantile,
+        "sparse_probe_min_patches": sam_cfg.sparse_probe_min_patches,
+        "sparse_probe_max_anchors": sam_cfg.sparse_probe_max_anchors,
+        "sparse_probe_dictionary_size": sam_cfg.sparse_probe_dictionary_size,
+        "sparse_probe_residual_threshold": sam_cfg.sparse_probe_residual_threshold,
+        "sparse_probe_max_sparsity": sam_cfg.sparse_probe_max_sparsity,
+        "sparse_probe_algorithm": sam_cfg.sparse_probe_algorithm,
+        "sparse_probe_iht_steps": sam_cfg.sparse_probe_iht_steps,
+        "sparse_probe_iht_lr": sam_cfg.sparse_probe_iht_lr,
+        "sparse_probe_heatmap_images": sam_cfg.sparse_probe_heatmap_images,
         "subset_test": subset_test,
         "batch_size_test": batch_size_test,
         "seed": seed,
@@ -577,6 +698,7 @@ def run_sam_fiber_job(
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
         embeddings_dir.mkdir(parents=True, exist_ok=True)
         analysis_dir.mkdir(parents=True, exist_ok=True)
+        _write_token_processing_notes(output_dir=output_dir, config=config, model=model)
 
         fiber_history: list[dict[str, Any]] = []
         collection_history: list[dict[str, Any]] = []
@@ -658,6 +780,19 @@ def run_sam_fiber_job(
                 alpha=sam_cfg.alpha,
                 nstrat=sam_cfg.nstrat,
                 neighborhood_size=int(sam_cfg.neighborhood_size or (sam_cfg.analysis_patch_size + 1)),
+                sparse_probe=bool(sam_cfg.sparse_probe),
+                sparse_probe_radius=sam_cfg.sparse_probe_radius,
+                sparse_probe_auto_neighbor_k=sam_cfg.sparse_probe_auto_neighbor_k,
+                sparse_probe_auto_radius_quantile=sam_cfg.sparse_probe_auto_radius_quantile,
+                sparse_probe_min_patches=sam_cfg.sparse_probe_min_patches,
+                sparse_probe_max_anchors=sam_cfg.sparse_probe_max_anchors,
+                sparse_probe_dictionary_size=sam_cfg.sparse_probe_dictionary_size,
+                sparse_probe_residual_threshold=sam_cfg.sparse_probe_residual_threshold,
+                sparse_probe_max_sparsity=sam_cfg.sparse_probe_max_sparsity,
+                sparse_probe_algorithm=sam_cfg.sparse_probe_algorithm,
+                sparse_probe_iht_steps=sam_cfg.sparse_probe_iht_steps,
+                sparse_probe_iht_lr=sam_cfg.sparse_probe_iht_lr,
+                sparse_probe_heatmap_images=sam_cfg.sparse_probe_heatmap_images,
                 wandb_module=wandb,
             )
             fiber_history.append(analysis["fiber_summary"])
@@ -684,6 +819,8 @@ def run_sam_fiber_job(
                         image=preview["image"],
                         masks=preview["masks"],
                         boxes=preview["boxes"],
+                        grid_h=int(preview.get("grid_h", 0)),
+                        grid_w=int(preview.get("grid_w", 0)),
                     )
                     if overlay is None:
                         continue
@@ -698,13 +835,31 @@ def run_sam_fiber_job(
                         grid.save(grid_path)
                         mask_preview_paths.append(grid_path.name)
                         if wandb is not None:
-                            payload: dict[str, Any] = {"epoch": epoch}
-                            payload["segmentation/box_prompt_mask_grid"] = wandb.Image(
+                            segmentation_caption = _segmentation_epoch_caption(
+                                epoch=epoch,
+                                summary=epoch_preview_summary,
+                                model_name=sam_cfg.model_name,
+                                dataset_name=dataset_name,
+                            )
+                            payload: dict[str, Any] = {
+                                "epoch": epoch,
+                                "media/epoch": epoch,
+                                "media/log_phase": "segmentation_preview",
+                                "media/media_index": epoch * 10 + 1,
+                                "segmentation/caption": segmentation_caption,
+                            }
+                            payload["segmentation/box_prompt_mask_grid"] = _wandb_image_with_caption(
+                                wandb,
                                 str(grid_path),
-                                caption=f"Epoch {epoch} | {sam_cfg.model_name} box-prompted SAM masks",
+                                segmentation_caption,
                             )
                             payload["segmentation/box_prompt_masks"] = [
-                                wandb.Image(str(path), caption=description) for path, description in overlay_payload
+                                _wandb_image_with_caption(
+                                    wandb,
+                                    str(path),
+                                    f"{description} Conclusion: use this image to check whether the prompted object masks align with the patch grid before interpreting token-level labels.",
+                                )
+                                for path, description in overlay_payload
                             ]
                             if hasattr(wandb, "Table") and preview_rows:
                                 columns = [
@@ -773,8 +928,16 @@ def run_sam_fiber_job(
                 if wandb is not None and hasattr(wandb, "Video"):
                     wandb.log(
                         {
+                            "epoch": max(0, epochs - 1),
+                            "media/epoch": max(0, epochs - 1),
+                            "media/log_phase": "embedding_animation",
+                            "media/media_index": max(0, epochs - 1) * 10 + 2,
                             "embeddings/progression": wandb.Video(str(animation_path), format="gif"),
                             "embeddings/progression_frames": len(frames),
+                            "embeddings/progression_caption": _embedding_animation_caption(
+                                dataset_name=dataset_name,
+                                frames=len(frames),
+                            ),
                         }
                     )
 

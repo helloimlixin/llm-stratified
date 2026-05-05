@@ -91,6 +91,67 @@ def _numeric_metric(value: Any) -> int | float | None:
     return numeric
 
 
+def _fmt_metric(value: Any, *, digits: int = 2, default: str = "n/a") -> str:
+    numeric = _numeric_metric(value)
+    if numeric is None:
+        return default
+    return f"{float(numeric):.{digits}f}"
+
+
+def _wandb_image_with_caption(wandb, path: Path, caption: str):
+    try:
+        return wandb.Image(str(path), caption=caption)
+    except TypeError:
+        return wandb.Image(str(path))
+
+
+def _summary_for_rep(results: dict[str, Any], rep_name: str) -> dict[str, Any]:
+    rep = _representations(results).get(rep_name)
+    return (rep or {}).get("summary", {}) if isinstance(rep, dict) else {}
+
+
+def _volume_probe_viz_caption(results: dict[str, Any], key: str) -> str:
+    rep_name = ""
+    plot_kind = key
+    for prefix in ("detail_", "scaling_", "nn_irregular_", "nn_"):
+        if key.startswith(prefix):
+            rep_name = key[len(prefix):]
+            plot_kind = prefix.rstrip("_")
+            break
+    summary = _summary_for_rep(results, rep_name) if rep_name else {}
+    mean_dim = _fmt_metric(summary.get("mean_dim"))
+    irregular_ratio = _fmt_metric(summary.get("irregular_ratio"), digits=3)
+    num_tokens = _fmt_metric(summary.get("num_tokens"), digits=0)
+
+    if plot_kind == "detail":
+        conclusion = (
+            "Use this dashboard to decide whether local dimension and irregularity are broadly distributed or concentrated in specific projected regions. "
+            f"Conclusion: representation {rep_name or 'n/a'} has mean dimension {mean_dim}, irregular ratio {irregular_ratio}, and {num_tokens} probed points; coherent colored regions suggest structured geometry, while speckled regions suggest abrupt local variation."
+        )
+    elif plot_kind == "scaling":
+        conclusion = (
+            "Use these scaling curves to inspect whether log neighbor count grows linearly with log radius and where change points split local strata. "
+            f"Conclusion: representation {rep_name or 'n/a'} should be read as more manifold-like when curves are smooth with stable slopes, and more stratified when dashed change-point lines split visibly different slopes; its mean dimension is {mean_dim} with irregular ratio {irregular_ratio}."
+        )
+    elif plot_kind == "nn_irregular":
+        conclusion = (
+            "Use this nearest-neighbor grid to audit the most irregular anchors visually. "
+            f"Conclusion: if neighbors share object parts or textures, irregularity may reflect real image structure; if they are visually unrelated, the representation neighborhood is semantically mixed. Representation {rep_name or 'n/a'} has irregular ratio {irregular_ratio}."
+        )
+    elif plot_kind == "nn":
+        conclusion = (
+            "Use this nearest-neighbor grid as a qualitative locality check. "
+            f"Conclusion: visually coherent rows mean the representation preserves patch-level similarity; mixed rows indicate that geometric neighbors are not visually local. Representation {rep_name or 'n/a'} has mean dimension {mean_dim}."
+        )
+    elif key.startswith("example_"):
+        conclusion = "Example patch grid. Conclusion: use this as a scale and content sanity check before interpreting geometric statistics."
+    elif key == "example_images":
+        conclusion = "Example image grid. Conclusion: use this to verify the sampled dataset, preprocessing scale, and image content for the probe run."
+    else:
+        conclusion = "Volume probe visualization. Conclusion: use this plot together with the numeric summary table to decide whether local geometry is smooth, stratified, or dominated by preprocessing artifacts."
+    return conclusion
+
+
 def _summary_payload(summary: dict[str, Any]) -> dict[str, int | float]:
     payload: dict[str, int | float] = {}
     for source_name, metric_name in SUMMARY_METRICS:
@@ -185,7 +246,9 @@ def build_volume_probe_log_payload(results: dict[str, Any], output_dir: Path, wa
         for key, filename in _viz_entries(results):
             path = _existing_output_path(output_dir, filename)
             if path is not None:
-                payload[f"volume_probe/viz/{key}"] = wandb.Image(str(path))
+                caption = _volume_probe_viz_caption(results, str(key))
+                payload[f"volume_probe/viz/{key}"] = _wandb_image_with_caption(wandb, path, caption)
+                payload[f"volume_probe/viz/{key}_caption"] = caption
 
     return payload
 

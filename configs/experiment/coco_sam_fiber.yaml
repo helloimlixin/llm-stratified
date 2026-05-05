@@ -1,6 +1,7 @@
 # @package _global_
-# Frozen SAM segmentation backbone + COCO fiber-bundle analysis with the
-# same W&B logging surface as the standard fiber runs.
+# Pretrained SAM ViT segmentation backbone + COCO object-prompt fiber analysis.
+# Uses COCO boxes as object prompts, SAM masks for patch labels, fiber tests on
+# pooled ViT image-encoder tokens, and local sparse dictionaries over raw patches.
 defaults:
   - override /data: coco
   - override /model: tinyvit
@@ -18,12 +19,17 @@ data:
 
 sam_fiber:
   model_name: facebook/sam-vit-base
-  epochs: 100
+  epochs: 1
   resample_each_epoch: true
   analysis_patch_size: 16
-  max_tokens: 1536
+  max_tokens: 2048
   max_boxes_per_image: 16
-  mask_preview_images: 6
+  mask_preview_images: 12
+  sparse_probe: true
+  sparse_probe_algorithm: omp
+  sparse_probe_residual_threshold: 0.15
+  sparse_probe_max_anchors: null
+  sparse_probe_heatmap_images: 8
 
 wandb:
   enabled: true

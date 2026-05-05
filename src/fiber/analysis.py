@@ -56,6 +56,113 @@ from fiber.ablation import (
 )
 
 
+def _finite_metric(value: Any) -> float:
+    try:
+        value_f = float(value)
+    except Exception:
+        return float("nan")
+    return value_f if math.isfinite(value_f) else float("nan")
+
+
+def _fmt_metric(value: Any, *, digits: int = 2, default: str = "n/a") -> str:
+    value_f = _finite_metric(value)
+    if not math.isfinite(value_f):
+        return default
+    return f"{value_f:.{digits}f}"
+
+
+def _wandb_image_with_caption(wandb_module, image: Any, caption: str):
+    try:
+        return wandb_module.Image(image, caption=caption)
+    except TypeError:
+        return wandb_module.Image(image)
+
+
+def _embedding_plot_caption(
+    *,
+    epoch: int,
+    projection: str,
+    fiber_summary: Dict[str, Any],
+    hypothesis_summary: Dict[str, Any],
+) -> str:
+    mean_dim = _finite_metric(fiber_summary.get("mean_dim"))
+    median_dim = _finite_metric(fiber_summary.get("median_dim"))
+    irregular_ratio = _finite_metric(fiber_summary.get("irregular_ratio"))
+    same_image = _finite_metric(hypothesis_summary.get("same_image_neighbor_ratio_mean"))
+    same_chance = _finite_metric(hypothesis_summary.get("same_image_neighbor_chance"))
+    local_chart = _finite_metric(hypothesis_summary.get("local_chart_score"))
+    stage = str(hypothesis_summary.get("hypothesis_stage", "unclassified"))
+
+    if math.isfinite(irregular_ratio) and irregular_ratio >= 0.45:
+        regularity_text = "a large rejected-token fraction, so local dimension is not behaving like one smooth uniform manifold"
+    elif math.isfinite(irregular_ratio) and irregular_ratio >= 0.20:
+        regularity_text = "a visible but not dominant singular set, so the representation looks mixed rather than uniformly regular"
+    else:
+        regularity_text = "a relatively small rejected-token fraction, so the sampled neighborhoods look closer to locally regular"
+
+    if math.isfinite(same_image) and math.isfinite(same_chance):
+        if same_image >= max(0.30, 5.0 * same_chance):
+            neighbor_text = "nearest-neighbor structure is strongly image-local"
+        elif same_image >= 2.0 * same_chance:
+            neighbor_text = "nearest-neighbor structure is somewhat more image-local than chance"
+        else:
+            neighbor_text = "nearest-neighbor structure is not much more image-local than chance"
+    else:
+        neighbor_text = "same-image neighbor structure is unavailable"
+
+    return (
+        f"Epoch {epoch} {projection} projection. Points are tokens and color encodes estimated local dimension; coherent color regions indicate smooth dimension fields, while speckled color changes indicate stratification or abrupt local geometry changes. "
+        f"Conclusion: this run has mean/median dimension {_fmt_metric(mean_dim)}/{_fmt_metric(median_dim)} and irregular ratio {_fmt_metric(irregular_ratio, digits=3)}, which indicates {regularity_text}. "
+        f"The hypothesis stage is {stage}; {neighbor_text}, and the local chart score is {_fmt_metric(local_chart, digits=3)}."
+    )
+
+
+def _polysemy_anchor_caption(*, epoch: int, polysemy_result: Dict[str, Any]) -> str:
+    anchors = [item for item in polysemy_result.get("anchors", []) if item]
+    entropies = [_finite_metric(item.get("label_entropy")) for item in anchors]
+    entropies = [value for value in entropies if math.isfinite(value)]
+    top_shares = [_finite_metric(item.get("top_label_share")) for item in anchors]
+    top_shares = [value for value in top_shares if math.isfinite(value)]
+    mean_entropy = float(np.mean(entropies)) if entropies else float("nan")
+    mean_top_share = float(np.mean(top_shares)) if top_shares else float("nan")
+    if math.isfinite(mean_entropy) and mean_entropy >= 1.0:
+        conclusion = "many anchor neighborhoods mix labels, so token neighborhoods are semantically polysemous rather than class-pure"
+    elif math.isfinite(mean_top_share) and mean_top_share >= 0.80:
+        conclusion = "anchor neighborhoods are mostly dominated by one label, so this sample shows limited semantic mixing"
+    else:
+        conclusion = "semantic mixing is moderate and should be compared against the selected anchor policy"
+    return (
+        f"Epoch {epoch} polysemy anchor plot. Entropy increases when neighboring tokens come from multiple labels, while top-label share decreases when no single class dominates. "
+        f"Conclusion: {conclusion}. Mean anchor entropy is {_fmt_metric(mean_entropy)} and mean top-label share is {_fmt_metric(mean_top_share, digits=3)} across {len(anchors)} anchors."
+    )
+
+
+def _polysemy_irregularity_caption(*, epoch: int, stats: Dict[str, Any]) -> str:
+    pearson = _finite_metric(stats.get("pearson_r"))
+    spearman = _finite_metric(stats.get("spearman_r"))
+    reject_entropy = _finite_metric(stats.get("mean_entropy_reject"))
+    ok_entropy = _finite_metric(stats.get("mean_entropy_non_reject"))
+    if math.isfinite(spearman) and abs(spearman) >= 0.30:
+        direction = "positive" if spearman > 0 else "negative"
+        conclusion = f"polysemy entropy has a {direction} association with geometric irregularity"
+    elif math.isfinite(reject_entropy) and math.isfinite(ok_entropy) and reject_entropy > ok_entropy:
+        conclusion = "rejected neighborhoods have higher average entropy, but the rank correlation is weak"
+    else:
+        conclusion = "semantic label mixing is not strongly aligned with geometric irregularity in this sample"
+    return (
+        f"Epoch {epoch} entropy-irregularity plot. This checks whether semantically mixed token neighborhoods are also the neighborhoods that fail the local fiber-bundle test. "
+        f"Conclusion: {conclusion}. Pearson r is {_fmt_metric(pearson)} and Spearman rho is {_fmt_metric(spearman)}; mean entropy is {_fmt_metric(reject_entropy)} for rejected tokens versus {_fmt_metric(ok_entropy)} for non-rejected tokens."
+    )
+
+
+def _irregular_samples_caption(*, epoch: int, item: Dict[str, Any]) -> str:
+    return (
+        f"Epoch {epoch} high-irregularity token. Conclusion: this patch is one of the strongest local fiber-test failures, "
+        f"with dimension {_fmt_metric(item.get('dim'))}, irregularity {_fmt_metric(item.get('irregularity'))}, "
+        f"and neighborhood dimension {_fmt_metric(item.get('neigh_dim'))}. Use these samples to inspect whether failures align with object boundaries, texture, occlusion, or mixed labels."
+    )
+
+
 def analyze_fiber_epoch(
     *,
     epoch: int,
@@ -98,6 +205,10 @@ def analyze_fiber_epoch(
     sparse_probe_dictionary_size: int = 32,
     sparse_probe_residual_threshold: float = 0.15,
     sparse_probe_max_sparsity: int = 16,
+    sparse_probe_algorithm: str = "omp",
+    sparse_probe_iht_steps: int = 80,
+    sparse_probe_iht_lr: float | None = None,
+    sparse_probe_heatmap_images: int = 8,
     wandb_module=None,
     model: torch.nn.Module | None = None,
     device: torch.device | None = None,
@@ -202,9 +313,14 @@ def analyze_fiber_epoch(
                 dictionary_size=sparse_probe_dictionary_size,
                 residual_threshold=sparse_probe_residual_threshold,
                 max_sparsity=sparse_probe_max_sparsity,
+                algorithm=sparse_probe_algorithm,
+                iht_steps=sparse_probe_iht_steps,
+                iht_lr=sparse_probe_iht_lr,
+                heatmap_max_images=sparse_probe_heatmap_images,
             )
             sparse_summary = sparse_probe_result.get("summary", {}) if sparse_probe_result else {}
             for key in (
+                "coding_algorithm",
                 "radius",
                 "candidate_tokens",
                 "evaluated_tokens",
@@ -226,6 +342,7 @@ def analyze_fiber_epoch(
                 "[sparse_probe] "
                 f"tokens={sparse_summary.get('evaluated_tokens', 0)}/"
                 f"{sparse_summary.get('candidate_tokens', 0)} "
+                f"algo={sparse_summary.get('coding_algorithm', sparse_probe_algorithm)} "
                 f"eps={float(sparse_summary.get('radius', float('nan'))):.4g} "
                 f"mean_sparsity={float(sparse_summary.get('mean_required_sparsity', float('nan'))):.3g} "
                 f"range={float(sparse_summary.get('sparsity_range', float('nan'))):.3g}",
@@ -436,13 +553,23 @@ def analyze_fiber_epoch(
 
     # Wandb logging
     if wandb_module:
+        projection_caption = _embedding_plot_caption(
+            epoch=epoch,
+            projection="PCA",
+            fiber_summary=fiber_summary,
+            hypothesis_summary=hypothesis_summary,
+        )
         log_dict: Dict[str, Any] = {
             "epoch": epoch,
+            "media/epoch": epoch,
+            "media/log_phase": "fiber_analysis",
+            "media/media_index": epoch * 10,
             "fiber/mean_dim": fiber_summary["mean_dim"],
             "fiber/median_dim": fiber_summary.get("median_dim", np.nan),
             "fiber/mean_irregularity": fiber_summary.get("mean_irregularity", np.nan),
             "fiber/irregular_ratio": fiber_summary.get("irregular_ratio", np.nan),
             "fiber/mean_neighborhood_dim": fiber_summary.get("mean_neighborhood_dim", np.nan),
+            "embeddings/pca_3d_caption": projection_caption,
         }
         for key, value in hypothesis_summary.items():
             if isinstance(value, str):
@@ -464,15 +591,31 @@ def analyze_fiber_epoch(
                     value_f = float(value)
                     log_dict[f"sparse_probe/{key}"] = value_f if math.isfinite(value_f) else np.nan
             sparse_plot = sparse_summary.get("plot_path")
+            sparse_caption = str(sparse_summary.get("interpretation") or "")
             if sparse_plot:
                 try:
-                    log_dict["sparse_probe/summary_plot"] = wandb_module.Image(str(sparse_plot))
+                    log_dict["sparse_probe/summary_plot"] = _wandb_image_with_caption(
+                        wandb_module,
+                        str(sparse_plot),
+                        sparse_caption,
+                    )
+                    if sparse_caption:
+                        log_dict["sparse_probe/summary_caption"] = sparse_caption
                 except Exception as e:
                     print(f"[wandb] skipped sparse_probe plot: {e}")
             sparse_heatmap = sparse_summary.get("heatmap_path")
             if sparse_heatmap:
                 try:
-                    log_dict["sparse_probe/image_heatmaps"] = wandb_module.Image(str(sparse_heatmap))
+                    heatmap_caption = (
+                        "Sparse complexity heatmap. Brighter patch overlays need more local dictionary atoms. "
+                        + sparse_caption
+                    ).strip()
+                    log_dict["sparse_probe/image_heatmaps"] = _wandb_image_with_caption(
+                        wandb_module,
+                        str(sparse_heatmap),
+                        heatmap_caption,
+                    )
+                    log_dict["sparse_probe/heatmap_caption"] = heatmap_caption
                 except Exception as e:
                     print(f"[wandb] skipped sparse_probe heatmap: {e}")
 
@@ -480,7 +623,7 @@ def analyze_fiber_epoch(
             wandb_module=wandb_module, key="embeddings/pca_3d",
             build_fn=lambda: (
                 (lambda fig: (
-                    wandb_module.Image(fig, caption=f"Epoch {epoch}"),
+                    _wandb_image_with_caption(wandb_module, fig, projection_caption),
                     _require_matplotlib().close(fig),
                 )[0])(build_embedding_scatter_figure(final_coords_3d, final_dims))
             ),
@@ -489,11 +632,18 @@ def analyze_fiber_epoch(
             log_dict["embeddings/pca_3d"] = pca_image
 
         if final_tsne_3d is not None:
+            tsne_caption = _embedding_plot_caption(
+                epoch=epoch,
+                projection="t-SNE",
+                fiber_summary=fiber_summary,
+                hypothesis_summary=hypothesis_summary,
+            )
+            log_dict["embeddings/tsne_3d_caption"] = tsne_caption
             tsne_image = _wandb_image_or_none(
                 wandb_module=wandb_module, key="embeddings/tsne_3d",
                 build_fn=lambda: (
                     (lambda fig: (
-                        wandb_module.Image(fig, caption=f"Epoch {epoch}"),
+                        _wandb_image_with_caption(wandb_module, fig, tsne_caption),
                         _require_matplotlib().close(fig),
                     )[0])(build_tsne_embedding_figure(
                         final_tsne_3d,
@@ -537,16 +687,23 @@ def analyze_fiber_epoch(
                         )
                 scatter_path = polysemy_result.get("paths", {}).get("polysemy/entropy_scatter")
                 if scatter_path:
-                    log_dict["polysemy/entropy_scatter"] = wandb_module.Image(str(scatter_path))
+                    scatter_caption = _polysemy_anchor_caption(epoch=epoch, polysemy_result=polysemy_result)
+                    log_dict["polysemy/entropy_scatter"] = _wandb_image_with_caption(
+                        wandb_module,
+                        str(scatter_path),
+                        scatter_caption,
+                    )
+                    log_dict["polysemy/entropy_scatter_caption"] = scatter_caption
                 irreg_path_val = polysemy_result.get("paths", {}).get("polysemy/entropy_irregularity")
                 irreg_stats_val = polysemy_result.get("entropy_irregularity_stats", {})
                 if irreg_path_val:
-                    caption = (
-                        f"entropy vs irregularity | "
-                        f"pearson r {float(irreg_stats_val.get('pearson_r', float('nan'))):.2f} | "
-                        f"spearman rho {float(irreg_stats_val.get('spearman_r', float('nan'))):.2f}"
+                    caption = _polysemy_irregularity_caption(epoch=epoch, stats=irreg_stats_val)
+                    log_dict["polysemy/entropy_irregularity"] = _wandb_image_with_caption(
+                        wandb_module,
+                        str(irreg_path_val),
+                        caption,
                     )
-                    log_dict["polysemy/entropy_irregularity"] = wandb_module.Image(str(irreg_path_val), caption=caption)
+                    log_dict["polysemy/entropy_irregularity_caption"] = caption
                 if isinstance(irreg_stats_val, dict):
                     for k_stat in ("pearson_r", "pearson_p", "spearman_r", "spearman_p",
                                    "mean_entropy_reject", "mean_entropy_non_reject", "n_reject", "n_total", "alpha"):
@@ -617,7 +774,7 @@ def analyze_fiber_epoch(
                                 neigh_value=item["neigh_dim"], neigh_max=neigh_max,
                                 neighborhood_size=neighborhood_size,
                             ),
-                            caption=f"dim {item['dim']:.2f}, irr {item['irregularity']:.2f}",
+                            caption=_irregular_samples_caption(epoch=epoch, item=item),
                         )
                         for item in irregular
                     ],

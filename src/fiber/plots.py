@@ -296,6 +296,9 @@ def _add_embedding_scatter_subplot(fig, subplot_spec, coords: np.ndarray, colors
         ax = fig.add_subplot(subplot_spec, projection="3d")
         sc = ax.scatter(coords_np[:, 0], coords_np[:, 1], coords_np[:, 2], c=colors, cmap="viridis", s=12, alpha=0.85)
         ax.set_title(title)
+        ax.set_xlabel("component 1")
+        ax.set_ylabel("component 2")
+        ax.set_zlabel("component 3")
         ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
         return ax, sc
 
@@ -342,7 +345,15 @@ def build_embedding_scatter_figure(
     plt_mod = _require_matplotlib()
     fig = plt_mod.figure(figsize=(6, 5))
     ax, sc = _add_embedding_scatter_subplot(fig, 111, coords3d, dims, title=title)
-    fig.colorbar(sc, ax=ax, shrink=0.6, label="dim"); fig.tight_layout()
+    fig.colorbar(sc, ax=ax, shrink=0.6, label="estimated local dimension")
+    fig.text(
+        0.02,
+        0.02,
+        "Color shows the first estimated local volume dimension for each token.",
+        fontsize=8,
+        color="#333333",
+    )
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
     return fig
 
 
@@ -400,14 +411,15 @@ def save_polysemy_irregularity_plot(
         ax0.scatter(ent_rej, irr[rejected], s=16, alpha=0.85, label="reject", color="#e45756")
     ax0.set_xlabel("Polysemy entropy (kNN labels)")
     ax0.set_ylabel("Irregularity (-log10 p)")
-    ax0.set_title(f"Entropy vs irregularity (r={pearson_r:.2f}, rho={spearman_r:.2f})")
+    ax0.set_title(f"Do semantic mixtures align with geometric failures? (r={pearson_r:.2f}, rho={spearman_r:.2f})")
     ax0.legend(fontsize=8, frameon=False)
     box_data = [ent_ok, ent_rej] if ent_rej.size else [ent_ok]
     ax1.boxplot(box_data, labels=["non-reject", "reject"] if ent_rej.size else ["non-reject"], showfliers=False)
     ax1.set_ylabel("Polysemy entropy")
-    ax1.set_title("Entropy by fiber-bundle rejection")
+    ax1.set_title("Entropy split by fiber-test outcome")
     out_path = out_dir / f"{prefix}_polysemy_entropy_vs_irregularity.png"
-    fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
+    fig.suptitle("Polysemy vs Fiber Irregularity", fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.93]); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
     return out_path, stats
 
 
@@ -435,9 +447,9 @@ def save_polysemy_entropy_scatter_plot(
     fig, ax = plt_mod.subplots(figsize=(6, 4))
     sc = ax.scatter(share, ent, c=uniq, cmap="viridis", s=45, alpha=0.85)
     ax.set_xlabel("Top-label share"); ax.set_ylabel("Label entropy")
-    ax.set_title("Polysemy anchors: entropy vs top-label share")
+    ax.set_title("Polysemy Anchors: Higher Entropy Means More Label Mixing")
     ax.set_xlim(0.0, 1.0)
-    fig.colorbar(sc, ax=ax, shrink=0.8, label="unique labels")
+    fig.colorbar(sc, ax=ax, shrink=0.8, label="unique labels in neighborhood")
     top_idx = np.argsort(-ent)[: max(1, annotate_top)]
     for i in top_idx:
         ax.text(share[i], ent[i], str(ids[i]), fontsize=7)
