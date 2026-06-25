@@ -1,0 +1,60 @@
+# @package _global_
+# Pretrained SOTA timm ViT on COCO with fiber diagnostics and sparse OMP probes.
+defaults:
+  - override /data: coco
+  - override /model: timm_vit
+  - override /training: debug
+  - override /fiber: sparse_probe
+  - override /sam_fiber: disabled
+  - override /volume_probe: disabled
+
+data:
+  img_size: 224
+  batch_size: 8
+  batch_size_test: 8
+  num_workers: 0
+  subset_train: 256
+  subset_test: 64
+
+model:
+  # DINOv3 ViT-L/16: modern large self-supervised ViT backbone, not TinyViT.
+  # For a much heavier local run, override with vit_huge_plus_patch16_dinov3.lvd1689m.
+  timm_model: vit_large_patch16_dinov3.lvd1689m
+  timm_pretrained: true
+  patch_size: 16
+  embed_dim: 1024
+  num_heads: 16
+
+training:
+  # Analysis-only: load pretrained ViT and run fiber/sparse probes without training.
+  epochs: 0
+  lr: 1e-4
+  save_interval: 1
+
+fiber:
+  embed_interval: 1
+  # 21 complete 14x14 ViT patch grids; keep this image-aligned for clean heatmaps.
+  max_tokens: 4116
+  embed_full_val: false
+  embedding_animation: false
+  vol_min: 8
+  vol_max: 64
+  ws: 4
+  alpha: 0.005
+  nstrat: 3
+  sparse_probe: true
+  sparse_probe_neighbor_k: 128
+  sparse_probe_min_patches: 12
+  sparse_probe_max_anchors: null
+  sparse_probe_dictionary_size: 128
+  sparse_probe_residual_threshold: 0.30
+  sparse_probe_max_sparsity: 64
+  sparse_probe_algorithm: omp
+  sparse_probe_heatmap_images: 16
+  sparse_probe_volume_curve: true
+  sparse_probe_volume_curve_volumes: [8, 16, 32, 64, 128, 256, 512]
+
+wandb:
+  enabled: true
+  project: stratified-manifold-learning
+  tags: [coco, pretrained-vit, dinov3, fiber-analysis, sparse-omp]

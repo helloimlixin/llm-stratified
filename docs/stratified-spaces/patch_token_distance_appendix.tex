@@ -1,0 +1,54 @@
+\section{Patch--Token Distance Heatmaps}
+\label{app:patch-token-distance}
+
+Raw image patches and model tokens cannot be subtracted directly: a $16\times16$ RGB patch is a pixel vector, while a DINOv3, SAM, SigLIP2, or AIMv2 token is a learned feature vector with a different dimension and scale. The question is therefore not whether one raw patch vector equals one token vector. The question is whether the \emph{geometry of nearby patches} is preserved after the model maps patches into token space.
+
+For each image, we compute two pairwise distance matrices over the same patch grid:
+\[
+  D^x_{ab}=\|x_a-x_b\|_2,
+  \qquad
+  D^z_{ab}=\|z_a-z_b\|_2,
+\]
+where $x_a,x_b$ are raw RGB patches and $z_a,z_b$ are the corresponding encoder tokens. Using Euclidean distance in token space matches the geometry used by the fiber probe. An earlier centered-cosine version overemphasized patch texture and is not used in the paper figures. For the paired DINOv3/SAM comparison, we recompute SAM-H tokens on the exact saved DINOv3-H+ image tensor, so both model heatmaps use the same 16 source images in the same order. SigLIP2-B and AIMv2-L use their own image-aligned 16-image embeddings from the vision-expansion runs.
+
+This distance diagnostic is complementary to the fiber and sparse probes. The fiber probe asks whether token-space volume growth follows the tested local geometric null. The sparse probe asks how hard it is to reconstruct raw patches inside a token neighborhood. Patch--token distance agreement asks a simpler alignment question: when raw patches are close or far in pixel space, are their learned tokens close or far in feature space? A representation can be highly image-local but still strongly reorganize distances within that image.
+
+We use three summaries. First, for each anchor patch, we compare the rank order of distances from that anchor to all other patches with the rank order of distances from the corresponding token to all other tokens. The heatmap value is the within-image Spearman correlation
+\[
+  \rho_i,
+\]
+between the raw-patch distance row $D^x_{i,:}$ and the token-distance row $D^z_{i,:}$. Brighter cells mean the token preserves the raw-patch distance ordering more closely; darker cells mean the token neighborhood has moved away from raw RGB similarity. This row-wise score is global within one image: it asks whether the full ordering of all other patches around the anchor is similar in raw and token space.
+
+Second, we report top-neighbor overlap. For each anchor, we compare the nearest 16 raw patches with the nearest 16 tokens and plot the fraction of neighbors that agree. This is a more local diagnostic than the rank-correlation score: it ignores the ordering of distant patches and asks whether the immediate neighborhood is preserved.
+
+Third, the matrix-gallery panels compare the whole normalized raw-patch distance matrix with the whole normalized token-distance matrix. The matrix-level rank correlation summarizes whether the image's overall patch-distance layout is preserved. This view is useful because two models can have similar nearest-neighbor overlap but differ in how they arrange medium- and long-range patch relations.
+
+These scores are not model-quality scores. A low value can mean that the representation has intentionally reorganized raw pixels according to semantics, context, segmentation cues, or invariances. A high value means the feature metric retains more raw-patch geometry. Across the shared 16-image \dataset{COCO} set, DINOv3-H+ has mean distance-rank correlation 0.299, top-16 neighbor overlap 0.279, and matrix-level rank correlation 0.304. SAM-H has 0.565, 0.381, and 0.591. SigLIP2-B has 0.136, 0.168, and 0.146; AIMv2-L has 0.099, 0.119, and 0.095. Thus SAM-H preserves more within-image raw-patch distance structure than DINOv3-H+, while SigLIP2-B and AIMv2-L are more strongly warped away from raw RGB patch geometry.
+
+This interpretation also clarifies the relationship to same-image locality in the main tables. Same-image locality asks whether the nearest token neighbors come from the same source image. Patch--token distance agreement asks a stricter question: within that image, does the token metric preserve which raw patches are close to which other raw patches? DINOv3-H+ is extremely image-local but has lower patch--token distance agreement than SAM-H, suggesting that its feature space keeps image identity while reorganizing within-image patch relations more strongly. SAM-H mixes images earlier, but within each image its token distances track raw-patch distances more closely under this diagnostic.
+
+\paragraph{Readable figure design.}
+The paper-facing distance visualizations separate the source image from the score grid. This avoids the color/image interference of overlay heatmaps while preserving the patch layout. The generated full overlay heatmaps and matrix galleries remain available in the artifact directories as audit outputs, but the figures below are the intended reader path.
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_patch_token_distance_digest}
+\caption{Compact summary of raw-patch versus token-distance agreement across the four \dataset{COCO} encoder runs. Higher values mean that learned token distances preserve more of the within-image raw RGB patch-distance structure. The per-image dot plots show that SAM-H has consistently higher raw-geometry retention than DINOv3-H+, while SigLIP2-B and AIMv2-L are more strongly reorganized away from raw RGB patch distances.}
+\label{fig:app-patch-token-distance-digest}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dino_sam_patch_token_rank_comparison}
+\caption{DINOv3-H+ versus SAM-H distance-rank agreement on representative shared \dataset{COCO} images. The source image is shown separately from the score grids; all score panels use one shared color scale, and the number inside each panel is the per-image mean. This view makes the main qualitative result easier to read: SAM-H more often preserves the raw-patch distance ordering within an image, while DINOv3-H+ reorganizes within-image patch relations more strongly.}
+\label{fig:app-dino-sam-patch-token-rank-comparison}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dino_sam_patch_token_neighbor_comparison}
+\caption{DINOv3-H+ versus SAM-H top-16 neighbor-overlap comparison on representative shared \dataset{COCO} images. Each score cell is the fraction of nearest raw RGB patch neighbors that are also nearest token neighbors for the same anchor patch. This local-neighborhood view complements the rank-agreement figure: SAM-H generally recovers more raw nearest neighbors, but both models retain only a partial copy of raw pixel geometry.}
+\label{fig:app-dino-sam-patch-token-neighbor-comparison}
+\end{figure}
+
+\clearpage

@@ -20,6 +20,8 @@ except ImportError:  # pragma: no cover
 __all__ = [
     "analyze_stratification",
     "analyze_stratification_from_sorted_distances",
+    "min_change_pvalue",
+    "min_fiber_violation_pvalue",
     "normalize_volume_range",
     "run_fiber_bundle_test",
     "run_fiber_bundle_test_from_sorted_dists",
@@ -80,6 +82,14 @@ def _geo_estimator(
     Uses weighted least squares with weights proportional to volume index,
     which reduces bias from the high-variance small-radius regime.
     """
+    radii = np.asarray(radii, dtype=np.float64)
+    volumes = np.asarray(volumes, dtype=np.float64)
+    valid = np.isfinite(radii) & np.isfinite(volumes) & (radii > 1e-10) & (volumes > 0)
+    if int(valid.sum()) < 2:
+        return float("nan"), float("nan"), 0.0
+
+    radii = radii[valid]
+    volumes = volumes[valid]
     log_r = np.log(radii)
     log_v = np.log(volumes)
 
@@ -145,15 +155,22 @@ def _stratification_test(
         )
         dimvec = np.where(finite_mask, smoothed, dimvec)
 
+    candidates: list[tuple[float, int]] = []
     for w in range(2 * ws, dimvec.shape[0] - 2 * ws):
         left = dimvec[w - 2 * ws : w - ws]
         left = left[np.logical_and(np.abs(left) > 1e-5, np.isfinite(left))]
         right = dimvec[w + ws : w + 2 * ws]
         right = right[np.logical_and(np.abs(right) > 1e-5, np.isfinite(right))]
         pvalue = _welch_ttest_pvalue(left, right)
-        if pvalue < alpha:
-            return w, pvalue
-    return None, 1.0
+        if np.isfinite(pvalue):
+            candidates.append((float(pvalue), int(w)))
+    if not candidates:
+        return None, 1.0
+    raw_pvalue, best_w = min(candidates, key=lambda item: item[0])
+    adjusted_pvalue = float(min(1.0, raw_pvalue * len(candidates)))
+    if adjusted_pvalue < alpha:
+        return best_w, adjusted_pvalue
+    return None, adjusted_pvalue
 
 
 def _estimate_stratifications(
@@ -175,9 +192,14 @@ def _estimate_stratifications(
         "strat_volumes": [],
         "pvalues": [],
     }
-    vol_min_current = int(np.argmax(radii > 1e-10))
+    positive = np.isfinite(radii) & (radii > 1e-10)
+    if not positive.any():
+        return output
+    vol_min_current = int(np.argmax(positive))
     for _ in range(args.nstrat):
         vol_max_current = radii.shape[0]
+        if vol_max_current - vol_min_current < 2:
+            break
         strat_idx, pvalue = _stratification_test(
             radii[vol_min_current:vol_max_current],
             volumes[vol_min_current:vol_max_current],
@@ -186,6 +208,8 @@ def _estimate_stratifications(
         )
         if strat_idx is not None:
             vol_max_current = strat_idx + vol_min_current
+        if vol_max_current - vol_min_current < 2:
+            break
         scaling_coeff, dimension, ricci = _geo_estimator(
             radii[vol_min_current:vol_max_current],
             volumes[vol_min_current:vol_max_current],
@@ -201,6 +225,10 @@ def _estimate_stratifications(
         if strat_idx is None:
             break
         vol_min_current = strat_idx + vol_min_current
+        while vol_min_current < radii.shape[0] and (
+            not np.isfinite(radii[vol_min_current]) or radii[vol_min_current] <= 1e-10
+        ):
+            vol_min_current += 1
     return output
 
 
@@ -217,6 +245,47 @@ def normalize_volume_range(npts: int, vol_min: int, vol_max: int) -> tuple[int, 
     if vol_max - vol_min < 5:
         vol_min = max(1, vol_max - 5)
     return vol_min, vol_max
+
+
+def min_change_pvalue(result: dict | None) -> float:
+    """Smallest detected slope-change p-value, regardless of direction."""
+    if not result or not result.get("pvalues"):
+        return float("nan")
+    values = np.asarray(result["pvalues"], dtype=np.float64)
+    values = values[np.isfinite(values)]
+    return float(np.min(values)) if values.size else float("nan")
+
+
+def min_fiber_violation_pvalue(result: dict | None) -> float:
+    """Smallest p-value for a slope increase across adjacent strata.
+
+    In the fiber-bundle null used by Robinson et al., the log(volume) versus
+    log(radius) slope is allowed to change, but it should not increase as radius
+    grows.  This helper therefore ignores significant decreasing changes and
+    returns only the best p-value for a directionally invalid increase.
+    """
+    if not result:
+        return float("nan")
+    dims = result.get("dimensions") or []
+    pvalues = result.get("pvalues") or []
+    if len(dims) < 2 or not pvalues:
+        return float("nan")
+    candidates: list[float] = []
+    for idx in range(min(len(dims) - 1, len(pvalues))):
+        try:
+            left = float(dims[idx])
+            right = float(dims[idx + 1])
+            pvalue = float(pvalues[idx])
+        except Exception:
+            continue
+        if (
+            math.isfinite(left)
+            and math.isfinite(right)
+            and math.isfinite(pvalue)
+            and right > left
+        ):
+            candidates.append(pvalue)
+    return float(np.min(candidates)) if candidates else float("nan")
 
 
 def sorted_distance_matrix(coords: np.ndarray) -> np.ndarray:
@@ -288,16 +357,25 @@ def analyze_stratification(
 def summarize_stratification(
     results: list[dict[str, list[float]]], alpha: float = 1e-2
 ) -> dict[str, float]:
-    first_dims, min_pvals, irr_scores, irregular_tokens = [], [], [], 0
+    first_dims, min_pvals, violation_pvals, irr_scores = [], [], [], []
+    any_change_tokens, irregular_tokens = 0, 0
     for res in results:
         if not res or not res["dimensions"]:
             continue
         first_dims.append(res["dimensions"][0])
-        min_p = min(res["pvalues"])
-        min_pvals.append(min_p)
-        irr_scores.append(-np.log10(min_p + 1e-12))
-        if min_p < alpha:
-            irregular_tokens += 1
+        min_p = min_change_pvalue(res)
+        if math.isfinite(min_p):
+            min_pvals.append(min_p)
+            if min_p < alpha:
+                any_change_tokens += 1
+        violation_p = min_fiber_violation_pvalue(res)
+        if math.isfinite(violation_p):
+            violation_pvals.append(violation_p)
+            irr_scores.append(-np.log10(violation_p + 1e-12))
+            if violation_p < alpha:
+                irregular_tokens += 1
+        else:
+            irr_scores.append(0.0)
     return {
         "num_tokens": len(results),
         "tokens_with_strata": len(first_dims),
@@ -305,6 +383,10 @@ def summarize_stratification(
         "median_dim": float(np.median(first_dims)) if first_dims else float("nan"),
         "min_pvalue": float(np.min(min_pvals)) if min_pvals else float("nan"),
         "max_pvalue": float(np.max(min_pvals)) if min_pvals else float("nan"),
+        "min_fiber_violation_pvalue": (
+            float(np.min(violation_pvals)) if violation_pvals else float("nan")
+        ),
+        "change_point_ratio": any_change_tokens / len(results) if results else float("nan"),
         "mean_irregularity": float(np.mean(irr_scores)) if irr_scores else float("nan"),
         "max_irregularity": float(np.max(irr_scores)) if irr_scores else float("nan"),
         "irregular_ratio": irregular_tokens / len(results) if results else float("nan"),

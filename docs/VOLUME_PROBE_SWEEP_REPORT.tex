@@ -1,109 +1,22 @@
-\documentclass[11pt]{article}
+\documentclass{article}
 \usepackage[margin=1in]{geometry}
-\usepackage[T1]{fontenc}
-\usepackage[utf8]{inputenc}
-\usepackage{booktabs}
-\usepackage{longtable}
-\usepackage{array}
-\usepackage{enumitem}
-\usepackage[hidelinks]{hyperref}
+\usepackage{hyperref}
 
-\title{Volume Probe Sweep Report}
-\date{Generated: 2026-04-11 22:18 EDT}
+\title{Superseded Volume Probe Sweep Report}
+\date{}
 
 \begin{document}
 \maketitle
 
-\section*{Inputs}
-\begin{itemize}[leftmargin=1.5em]
-\item \texttt{/scratch/xl598/runs/llm-stratified/20260411\_volume\_probe\_parallel/pixel\_stratification\_sweep}
-\item \texttt{/scratch/xl598/runs/llm-stratified/20260411\_volume\_probe\_parallel/pretrained\_pixel\_sweep}
-\item Aggregated JSON: \texttt{/scratch/xl598/runs/llm-stratified/20260411\_volume\_probe\_parallel/volume\_probe\_sweep\_report.json}
+This April 2026 sweep report has been retired from the active documentation. It was useful for developing the local volume-scaling estimator, but the current project narrative now centers on frozen, image-aligned patch-token probes over DINOv3, SAM, SigLIP2, AIMv2, and VAR.
+
+The current empirical record is maintained in:
+\begin{itemize}
+\item \texttt{docs/RESULTS.md}
+\item \texttt{docs/COCO\_PRETRAINED\_VIT\_SAM\_ANALYSIS.md}
+\item \texttt{docs/stratified-spaces/main.tex}
 \end{itemize}
 
-\section*{Coverage}
-\begin{center}
-\begin{tabular}{lrr}
-\toprule
-sweep & completed\_runs & incomplete\_dirs \\
-\midrule
-pixel\_stratification\_sweep & 10 & 0 \\
-pretrained\_pixel\_sweep & 8 & 0 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\section*{Key Findings}
-\begin{itemize}[leftmargin=1.5em]
-\item Overlapping raw patches increased irregularity in 1/4 matched dataset/patch pairs; the largest jump was STL10 patch 16 (0.861 $\rightarrow$ 0.873).
-\item The most stratified raw-pixel configuration was STL10 patch 8 stride 8 (irregular\_ratio = 0.875), while the smoothest completed raw-pixel run was CIFAR10 patch 16 stride 8 (irregular\_ratio = 0.793).
-\item Across the pure pixel sweep, token irregularity was 0.052 higher than the matched raw-pixel probe on average (mean token-minus-pixel delta).
-\item DINO token representations were less irregular than their matched raw-pixel probes in 0/6 completed DINO runs (mean raw = 0.852, mean token = 0.900).
-\item In the multilayer DINO runs, irregularity decreased monotonically from layer 03 to 06 to last in 0/2 cases.
-\item Against the included untrained TinyViT baseline, DINO last-layer token irregularity was lower on 1/2 shared datasets.
-\end{itemize}
-
-\section*{Pixel Sweep}
-Metric cells use \texttt{mean\_dim / irregular\_ratio}.
-
-\begin{center}
-\small
-\begin{longtable}{lccccc}
-\toprule
-dataset & patch & stride & raw\_pixels & tokens & patch\_embeddings \\
-\midrule
-\endfirsthead
-\toprule
-dataset & patch & stride & raw\_pixels & tokens & patch\_embeddings \\
-\midrule
-\endhead
-CIFAR10 & 4 & 4 & 8.18 / 0.833 & 4.57 / 0.949 & 7.98 / 0.832 \\
-CIFAR10 & 8 & 4 & 12.11 / 0.823 & 7.23 / 0.872 & 11.30 / 0.813 \\
-CIFAR10 & 8 & 8 & 11.36 / 0.825 & 7.23 / 0.872 & 11.30 / 0.813 \\
-CIFAR10 & 16 & 8 & 15.65 / 0.793 & 14.33 / 0.810 & 14.84 / 0.797 \\
-CIFAR10 & 16 & 16 & 15.23 / 0.807 & 14.33 / 0.810 & 14.84 / 0.797 \\
-STL10 & 4 & 4 & 8.94 / 0.853 & 10.31 / 0.883 & 8.84 / 0.859 \\
-STL10 & 8 & 4 & 14.97 / 0.873 & 8.42 / 0.944 & 12.66 / 0.868 \\
-STL10 & 8 & 8 & 13.20 / 0.875 & 8.42 / 0.944 & 12.66 / 0.868 \\
-STL10 & 16 & 8 & 17.60 / 0.873 & 6.11 / 0.926 & 15.41 / 0.853 \\
-STL10 & 16 & 16 & 16.00 / 0.861 & 6.11 / 0.926 & 15.41 / 0.853 \\
-\bottomrule
-\end{longtable}
-\normalsize
-\end{center}
-
-\section*{Pretrained Sweep}
-Metric cells use \texttt{mean\_dim / irregular\_ratio}.
-
-\begin{center}
-\small
-\begin{longtable}{llccccc>{\raggedright\arraybackslash}p{1.4cm}>{\raggedright\arraybackslash}p{1.4cm}}
-\toprule
-dataset & variant & patch & stride & raw\_pixels & patch\_embeddings & tokens\_or\_last & layer\_03 & layer\_06 \\
-\midrule
-\endfirsthead
-\toprule
-dataset & variant & patch & stride & raw\_pixels & patch\_embeddings & tokens\_or\_last & layer\_03 & layer\_06 \\
-\midrule
-\endhead
-CIFAR10 & dinov2\_last & 14 & 7 & 4.90 / 0.838 & 10.36 / 0.807 & 5.10 / 0.906 & n/a & n/a \\
-CIFAR10 & dinov2\_last & 14 & 14 & 5.32 / 0.833 & 10.36 / 0.807 & 5.10 / 0.906 & n/a & n/a \\
-CIFAR10 & dinov2\_multilayer & 14 & 14 & 5.32 / 0.833 & 10.36 / 0.807 & 5.10 / 0.906 & 16.62 / 0.793 & 12.38 / 0.849 \\
-CIFAR10 & untrained\_tinyvit & 8 & 8 & 11.36 / 0.825 & 11.30 / 0.813 & 7.23 / 0.872 & n/a & n/a \\
-STL10 & dinov2\_last & 14 & 7 & 8.49 / 0.854 & 25.92 / 0.819 & 5.62 / 0.895 & n/a & n/a \\
-STL10 & dinov2\_last & 14 & 14 & 10.41 / 0.877 & 25.92 / 0.819 & 5.62 / 0.895 & n/a & n/a \\
-STL10 & dinov2\_multilayer & 14 & 14 & 10.41 / 0.877 & 25.92 / 0.819 & 5.62 / 0.895 & 22.57 / 0.808 & 15.58 / 0.830 \\
-STL10 & untrained\_tinyvit & 8 & 8 & 13.20 / 0.875 & 12.66 / 0.868 & 8.42 / 0.944 & n/a & n/a \\
-\bottomrule
-\end{longtable}
-\normalsize
-\end{center}
-
-\section*{Notes}
-\begin{itemize}[leftmargin=1.5em]
-\item \texttt{raw\_pixels} refers to the primary raw-pixel probe for that run: \texttt{patch\_pixels} for non-overlapping patches or \texttt{patch\_pixels\_stride\_<k>} when overlap was enabled.
-\item \texttt{tokens\_or\_last} maps to \texttt{tokens} for TinyViT runs and to the last-layer token representation for DINO runs.
-\item Comparisons across the DINO and untrained TinyViT rows are informative but not perfectly apples-to-apples because their patch grids differ.
-\end{itemize}
+The retained methodological lesson is that raw image patches and learned token spaces should be tested locally rather than summarized by one global dimension. Current runs apply that lesson to pretrained dense vision representations, project diagnostics back to image patches, and pair fiber-bundle violations with local sparse raw-patch complexity.
 
 \end{document}

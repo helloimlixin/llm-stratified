@@ -695,7 +695,7 @@ def main() -> None:
         )
         tok_path.parent.mkdir(parents=True, exist_ok=True)
         tok.save(tok_path)
-        print(f"[tokenizer] saved → {tok_path}")
+        print(f"[tokenizer] saved -> {tok_path}")
         return
 
     if not tok_path.exists():

@@ -1,10 +1,10 @@
 # @package _global_
-# Pretrained SAM ViT segmentation backbone + COCO object-prompt fiber analysis.
+# Pretrained SAM ViT-H segmentation backbone + COCO object-prompt fiber analysis.
 # Uses COCO boxes as object prompts, SAM masks for patch labels, fiber tests on
 # pooled ViT image-encoder tokens, and local sparse dictionaries over raw patches.
 defaults:
   - override /data: coco
-  - override /model: tinyvit
+  - override /model: sam_base
   - override /training: debug
   - override /fiber: disabled
   - override /sam_fiber: basic
@@ -12,26 +12,33 @@ defaults:
 
 data:
   img_size: 224
-  batch_size_test: 4
+  batch_size_test: 2
   num_workers: 0
   subset_train: null
   subset_test: 128
 
 sam_fiber:
-  model_name: facebook/sam-vit-base
+  model_name: facebook/sam-vit-huge
   epochs: 1
   resample_each_epoch: true
   analysis_patch_size: 16
-  max_tokens: 2048
+  # 16 complete 14x14 SAM encoder patch grids; keep this image-aligned for clean heatmaps.
+  max_tokens: 3136
   max_boxes_per_image: 16
-  mask_preview_images: 12
+  mask_preview_images: 16
   sparse_probe: true
+  sparse_probe_neighbor_k: 128
   sparse_probe_algorithm: omp
-  sparse_probe_residual_threshold: 0.15
+  sparse_probe_residual_threshold: 0.30
+  sparse_probe_dictionary_size: 128
+  sparse_probe_max_sparsity: 64
   sparse_probe_max_anchors: null
-  sparse_probe_heatmap_images: 8
+  sparse_probe_heatmap_images: 16
+  sparse_probe_log_summary_plot: false
+  sparse_probe_volume_curve: true
+  sparse_probe_volume_curve_volumes: [8, 16, 32, 64, 128, 256, 512]
 
 wandb:
   enabled: true
   project: stratified-manifold-learning
-  tags: [sam, segmentation, coco, fiber-analysis]
+  tags: [sam, sam-vit-huge, segmentation, coco, fiber-analysis]

@@ -40,6 +40,7 @@ class FiberConfig:
     vit_token_polysemy_ablate_reps: int = 5
     sparse_probe: bool = False
     sparse_probe_radius: Optional[float] = None
+    sparse_probe_neighbor_k: Optional[int] = None
     sparse_probe_auto_neighbor_k: int = 32
     sparse_probe_auto_radius_quantile: float = 0.5
     sparse_probe_min_patches: int = 12
@@ -47,6 +48,15 @@ class FiberConfig:
     sparse_probe_dictionary_size: int = 32
     sparse_probe_residual_threshold: float = 0.15
     sparse_probe_max_sparsity: int = 16
+    sparse_probe_algorithm: str = "omp"
+    sparse_probe_iht_steps: int = 80
+    sparse_probe_iht_lr: Optional[float] = None
+    sparse_probe_heatmap_images: int = 16
+    sparse_probe_log_summary_plot: bool = False
+    sparse_probe_volume_curve: bool = False
+    sparse_probe_volume_curve_volumes: Optional[list[int]] = None
+    sparse_probe_global_curve: bool = False  # Backward-compatible alias.
+    sparse_probe_global_curve_volumes: Optional[list[int]] = None  # Backward-compatible alias.
 
 
 @dataclass
@@ -89,10 +99,11 @@ class SamFiberConfig:
     progress: bool = True
     mask_threshold: float = 0.25
     max_boxes_per_image: int = 16
-    mask_preview_images: int = 6
+    mask_preview_images: int = 16
     multimask_output: bool = False
     sparse_probe: bool = False
     sparse_probe_radius: Optional[float] = None
+    sparse_probe_neighbor_k: Optional[int] = None
     sparse_probe_auto_neighbor_k: int = 32
     sparse_probe_auto_radius_quantile: float = 0.5
     sparse_probe_min_patches: int = 12
@@ -103,7 +114,10 @@ class SamFiberConfig:
     sparse_probe_algorithm: str = "omp"
     sparse_probe_iht_steps: int = 80
     sparse_probe_iht_lr: Optional[float] = None
-    sparse_probe_heatmap_images: int = 8
+    sparse_probe_heatmap_images: int = 16
+    sparse_probe_log_summary_plot: bool = False
+    sparse_probe_volume_curve: bool = False
+    sparse_probe_volume_curve_volumes: Optional[list[int]] = None
     embedding_animation: bool = True
     embedding_animation_fps: int = 1
 

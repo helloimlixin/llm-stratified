@@ -62,6 +62,8 @@ results/
 *_output/
 *_results/
 data/
+!configs/data/
+!configs/data/*.yaml
 outputs/
 runs/
 tinyvit_runs/

@@ -1,0 +1,61 @@
+# @package _global_
+# Analysis-only COCO probe for FoundationVision VAR-d30 autoregressive image generator.
+defaults:
+  - override /data: coco
+  - override /model: var_ar
+  - override /training: debug
+  - override /fiber: sparse_probe
+  - override /sam_fiber: disabled
+  - override /volume_probe: disabled
+
+data:
+  img_size: 256
+  batch_size: 1
+  batch_size_test: 1
+  num_workers: 0
+  subset_train: 64
+  subset_test: 64
+
+model:
+  frozen_backbone: var
+  frozen_backbone_model: var_d30
+  patch_size: 16
+  embed_dim: 1920
+  depth: 30
+  num_heads: 30
+
+training:
+  # No classifier training; run frozen teacher-forced VAR token probes only.
+  epochs: 0
+  lr: 1e-4
+  save_interval: 1
+
+fiber:
+  embed_interval: 1
+  # Use 16 complete 16x16 VAR final-scale token grids so paper heatmaps use a
+  # consistent 4x4 image layout.
+  max_tokens: 4096
+  embed_full_val: false
+  embedding_animation: false
+  vol_min: 8
+  vol_max: 64
+  ws: 4
+  alpha: 0.005
+  nstrat: 3
+  sparse_probe: true
+  sparse_probe_neighbor_k: 128
+  sparse_probe_min_patches: 12
+  sparse_probe_max_anchors: null
+  sparse_probe_dictionary_size: 128
+  sparse_probe_residual_threshold: 0.30
+  sparse_probe_max_sparsity: 64
+  sparse_probe_algorithm: omp
+  sparse_probe_heatmap_images: 16
+  sparse_probe_log_summary_plot: false
+  sparse_probe_volume_curve: true
+  sparse_probe_volume_curve_volumes: [8, 16, 32, 64, 128, 256, 512]
+
+wandb:
+  enabled: true
+  project: stratified-manifold-learning
+  tags: [coco, var, var-d30, autoregressive, fiber-analysis, sparse-omp]

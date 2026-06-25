@@ -13,14 +13,14 @@ from torch.utils.data import DataLoader, DistributedSampler, Subset
 
 from utils import to_serializable
 
-from fiber.geometry import analyze_stratification, summarize_stratification
+from fiber.geometry import analyze_stratification, min_fiber_violation_pvalue, summarize_stratification
 from fiber.hypothesis import (
     estimate_neighborhood_dimensions,
     format_hypothesis_summary_line,
     summarize_class_dimensions,
     summarize_hypothesis_metrics,
 )
-from fiber.sparse_probe import run_sparse_dictionary_probe
+from fiber.sparse_probe import run_neighborhood_dictionary_volume_curve, run_sparse_dictionary_probe
 from fiber.plots import (
     HAS_MATPLOTLIB,
     _maybe_wandb_metric_table,
@@ -35,6 +35,9 @@ from fiber.plots import (
     select_singular_tokens,
     save_polysemy_entropy_scatter_plot,
     save_polysemy_irregularity_plot,
+    save_dimension_patch_gallery,
+    save_fiber_volume_curve_gallery,
+    save_patch_metric_heatmap,
     _require_matplotlib,
 )
 from fiber.polysemy import (
@@ -198,6 +201,7 @@ def analyze_fiber_epoch(
     vit_token_polysemy_ablate_reps: int = 5,
     sparse_probe: bool = False,
     sparse_probe_radius: float | None = None,
+    sparse_probe_neighbor_k: int | None = None,
     sparse_probe_auto_neighbor_k: int = 32,
     sparse_probe_auto_radius_quantile: float = 0.5,
     sparse_probe_min_patches: int = 12,
@@ -208,7 +212,10 @@ def analyze_fiber_epoch(
     sparse_probe_algorithm: str = "omp",
     sparse_probe_iht_steps: int = 80,
     sparse_probe_iht_lr: float | None = None,
-    sparse_probe_heatmap_images: int = 8,
+    sparse_probe_heatmap_images: int = 16,
+    sparse_probe_log_summary_plot: bool = False,
+    sparse_probe_volume_curve: bool = False,
+    sparse_probe_volume_curve_volumes: list[int] | tuple[int, ...] | None = None,
     wandb_module=None,
     model: torch.nn.Module | None = None,
     device: torch.device | None = None,
@@ -235,7 +242,7 @@ def analyze_fiber_epoch(
         embed_dir / f"epoch_{epoch:03d}.pt",
     )
 
-    fiber_results, _sorted_dists, unsorted_dists = analyze_stratification(
+    fiber_results, sorted_dists, unsorted_dists = analyze_stratification(
         embeddings, vol_min=vol_min, vol_max=vol_max, ws=ws, alpha=alpha, nstrat=nstrat
     )
     neighborhood_dims = estimate_neighborhood_dimensions(fiber_results, bboxes, neighborhood_size)
@@ -292,7 +299,83 @@ def analyze_fiber_epoch(
     if narrative:
         print(f"[hypothesis] {narrative}", flush=True)
 
+    fiber_visualization_paths: Dict[str, str] = {}
+    fiber_visualization_rows: list[dict[str, Any]] = []
+    try:
+        irregularity_values = np.array(
+            [
+                (
+                    -math.log10(p + 1e-12)
+                    if math.isfinite((p := min_fiber_violation_pvalue(res)))
+                    else 0.0
+                )
+                for res in fiber_results
+            ],
+            dtype=np.float64,
+        )
+        dim_heatmap_path = save_patch_metric_heatmap(
+            images=images,
+            image_ids=image_ids,
+            bboxes=bboxes,
+            values=final_dims,
+            dataset=dataset,
+            out_path=analysis_dir / f"epoch_{epoch:03d}_fiber_dimension_heatmap.png",
+            title="Estimated Local Dimension Projected Back to Image Patches",
+            colorbar_label="estimated local dimension",
+            max_images=16,
+            cmap="viridis",
+        )
+        if dim_heatmap_path:
+            fiber_visualization_paths["dimension_heatmap"] = str(dim_heatmap_path)
+        irr_heatmap_path = save_patch_metric_heatmap(
+            images=images,
+            image_ids=image_ids,
+            bboxes=bboxes,
+            values=irregularity_values,
+            dataset=dataset,
+            out_path=analysis_dir / f"epoch_{epoch:03d}_fiber_irregularity_heatmap.png",
+            title="Fiber-Bundle Violations Projected Back to Image Patches",
+            colorbar_label="irregularity -log10(p)",
+            max_images=16,
+            cmap="magma",
+        )
+        if irr_heatmap_path:
+            fiber_visualization_paths["irregularity_heatmap"] = str(irr_heatmap_path)
+        patch_gallery_path, _dimension_groups = save_dimension_patch_gallery(
+            images=images,
+            image_ids=image_ids,
+            bboxes=bboxes,
+            fiber_results=fiber_results,
+            dataset=dataset,
+            out_path=analysis_dir / f"epoch_{epoch:03d}_fiber_dimension_patch_gallery.png",
+            per_group=8,
+        )
+        if patch_gallery_path:
+            fiber_visualization_paths["dimension_patch_gallery"] = str(patch_gallery_path)
+        curve_gallery_path, curve_rows = save_fiber_volume_curve_gallery(
+            sorted_dists=sorted_dists,
+            images=images,
+            image_ids=image_ids,
+            bboxes=bboxes,
+            fiber_results=fiber_results,
+            dataset=dataset,
+            out_path=analysis_dir / f"epoch_{epoch:03d}_fiber_volume_curve_gallery.png",
+            vol_min=vol_min,
+            vol_max=vol_max,
+            alpha=alpha,
+            per_group=2,
+        )
+        if curve_gallery_path:
+            fiber_visualization_paths["volume_curve_gallery"] = str(curve_gallery_path)
+        fiber_visualization_rows = curve_rows
+        if fiber_visualization_rows:
+            with open(analysis_dir / f"epoch_{epoch:03d}_fiber_visualization_tokens.json", "w") as fp:
+                json.dump(to_serializable(fiber_visualization_rows), fp, indent=2)
+    except Exception as e:
+        print(f"[fiber_viz] failed: {e}", flush=True)
+
     sparse_probe_result = None
+    sparse_volume_curve_result = None
     if sparse_probe:
         try:
             sparse_probe_result = run_sparse_dictionary_probe(
@@ -306,6 +389,7 @@ def analyze_fiber_epoch(
                 out_dir=analysis_dir,
                 patch_size=patch_size,
                 radius=sparse_probe_radius,
+                neighbor_k=sparse_probe_neighbor_k,
                 auto_neighbor_k=sparse_probe_auto_neighbor_k,
                 auto_radius_quantile=sparse_probe_auto_radius_quantile,
                 min_patches=sparse_probe_min_patches,
@@ -321,7 +405,10 @@ def analyze_fiber_epoch(
             sparse_summary = sparse_probe_result.get("summary", {}) if sparse_probe_result else {}
             for key in (
                 "coding_algorithm",
+                "neighborhood_mode",
+                "neighbor_k",
                 "radius",
+                "radius_source",
                 "candidate_tokens",
                 "evaluated_tokens",
                 "mean_patch_count",
@@ -338,12 +425,25 @@ def analyze_fiber_epoch(
             ):
                 if key in sparse_summary:
                     fiber_summary[f"sparse_probe_{key}"] = sparse_summary[key]
+            if sparse_summary.get("neighborhood_mode") == "knn":
+                neighborhood_desc = f"k={sparse_summary.get('neighbor_k', 'n/a')}"
+            else:
+                radius_value = sparse_summary.get("radius")
+                radius_desc = "n/a"
+                if radius_value is not None:
+                    try:
+                        radius_f = float(radius_value)
+                        if math.isfinite(radius_f):
+                            radius_desc = f"{radius_f:.4g}"
+                    except Exception:
+                        pass
+                neighborhood_desc = f"eps={radius_desc}"
             print(
                 "[sparse_probe] "
                 f"tokens={sparse_summary.get('evaluated_tokens', 0)}/"
                 f"{sparse_summary.get('candidate_tokens', 0)} "
                 f"algo={sparse_summary.get('coding_algorithm', sparse_probe_algorithm)} "
-                f"eps={float(sparse_summary.get('radius', float('nan'))):.4g} "
+                f"{neighborhood_desc} "
                 f"mean_sparsity={float(sparse_summary.get('mean_required_sparsity', float('nan'))):.3g} "
                 f"range={float(sparse_summary.get('sparsity_range', float('nan'))):.3g}",
                 flush=True,
@@ -351,7 +451,47 @@ def analyze_fiber_epoch(
         except Exception as e:
             print(f"[sparse_probe] failed: {e}", flush=True)
 
-    del unsorted_dists  # free O(N^2) memory
+    if sparse_probe_volume_curve:
+        try:
+            sparse_volume_curve_result = run_neighborhood_dictionary_volume_curve(
+                epoch=epoch,
+                embeddings=embeddings,
+                images=images,
+                image_ids=image_ids,
+                bboxes=bboxes,
+                dists=unsorted_dists,
+                out_dir=analysis_dir,
+                patch_size=patch_size,
+                volumes=sparse_probe_volume_curve_volumes,
+                dictionary_size=sparse_probe_dictionary_size,
+                residual_threshold=sparse_probe_residual_threshold,
+                max_sparsity=sparse_probe_max_sparsity,
+                algorithm=sparse_probe_algorithm,
+                iht_steps=sparse_probe_iht_steps,
+                iht_lr=sparse_probe_iht_lr,
+            )
+            curve_summary = sparse_volume_curve_result.get("summary", {}) if sparse_volume_curve_result else {}
+            for key in (
+                "anchor_token_index",
+                "mean_dictionary_atoms",
+                "max_dictionary_atoms",
+                "mean_dictionary_patch_count",
+                "max_dictionary_patch_count",
+                "evaluated_volumes",
+            ):
+                if key in curve_summary:
+                    fiber_summary[f"sparse_volume_curve_{key}"] = curve_summary[key]
+            print(
+                "[sparse_volume_curve] "
+                f"anchor={curve_summary.get('anchor_token_index', 'n/a')} "
+                f"volumes={curve_summary.get('evaluated_volumes', 0)} "
+                f"mean_atoms={curve_summary.get('mean_dictionary_atoms', 0)}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[sparse_volume_curve] failed: {e}", flush=True)
+
+    del sorted_dists, unsorted_dists  # free O(N^2) memory
 
     with open(base_dir / f"fiber_epoch_{epoch:03d}.json", "w") as fp:
         json.dump(to_serializable(fiber_results), fp, indent=2)
@@ -582,6 +722,47 @@ def analyze_fiber_epoch(
         if metric_table is not None:
             log_dict["hypothesis/summary_table"] = metric_table
 
+        fiber_viz_captions = {
+            "dimension_heatmap": (
+                "Estimated local dimension projected back to image patches. "
+                "The value is the first fitted slope of log neighbor count versus log radius for each patch token."
+            ),
+            "irregularity_heatmap": (
+                "Fiber-bundle violation score projected back to image patches. "
+                "Irregularity is -log10(p) for significant slope increases; decreasing slope changes are allowed by the fiber-bundle null."
+            ),
+            "dimension_patch_gallery": (
+                "Patch crops grouped by low, mid, high estimated dimension and by strongest fiber-bundle violations."
+            ),
+            "volume_curve_gallery": (
+                "Paper-style log-volume/log-radius curves for representative vision patches, with detected stratum boundaries marked."
+            ),
+        }
+        for viz_key, viz_path in fiber_visualization_paths.items():
+            try:
+                log_dict[f"fiber_visualizations/{viz_key}"] = _wandb_image_with_caption(
+                    wandb_module,
+                    str(viz_path),
+                    fiber_viz_captions.get(viz_key, viz_key),
+                )
+            except Exception as e:
+                print(f"[wandb] skipped fiber visualization {viz_key}: {e}")
+        if hasattr(wandb_module, "Table") and fiber_visualization_rows:
+            columns = [
+                "group",
+                "token_index",
+                "image_id",
+                "dimension",
+                "irregularity",
+                "min_fiber_violation_pvalue",
+                "slopes",
+                "change_pvalues",
+            ]
+            log_dict["fiber_visualizations/volume_curve_tokens"] = wandb_module.Table(
+                columns=columns,
+                data=[[row.get(column) for column in columns] for row in fiber_visualization_rows],
+            )
+
         if sparse_probe_result:
             sparse_summary = sparse_probe_result.get("summary", {})
             for key, value in sparse_summary.items():
@@ -592,7 +773,7 @@ def analyze_fiber_epoch(
                     log_dict[f"sparse_probe/{key}"] = value_f if math.isfinite(value_f) else np.nan
             sparse_plot = sparse_summary.get("plot_path")
             sparse_caption = str(sparse_summary.get("interpretation") or "")
-            if sparse_plot:
+            if sparse_probe_log_summary_plot and sparse_plot:
                 try:
                     log_dict["sparse_probe/summary_plot"] = _wandb_image_with_caption(
                         wandb_module,
@@ -603,11 +784,16 @@ def analyze_fiber_epoch(
                         log_dict["sparse_probe/summary_caption"] = sparse_caption
                 except Exception as e:
                     print(f"[wandb] skipped sparse_probe plot: {e}")
+            elif sparse_plot:
+                log_dict["sparse_probe/summary_plot_path"] = str(sparse_plot)
+                if sparse_caption:
+                    log_dict["sparse_probe/summary_caption"] = sparse_caption
             sparse_heatmap = sparse_summary.get("heatmap_path")
             if sparse_heatmap:
                 try:
                     heatmap_caption = (
-                        "Sparse complexity heatmap. Brighter patch overlays need more local dictionary atoms. "
+                        "Sparse complexity projected back to image patches. Brighter overlays mark patches whose "
+                        "embedding neighborhoods need more local dictionary atoms. "
                         + sparse_caption
                     ).strip()
                     log_dict["sparse_probe/image_heatmaps"] = _wandb_image_with_caption(
@@ -618,6 +804,64 @@ def analyze_fiber_epoch(
                     log_dict["sparse_probe/heatmap_caption"] = heatmap_caption
                 except Exception as e:
                     print(f"[wandb] skipped sparse_probe heatmap: {e}")
+            if hasattr(wandb_module, "Table") and sparse_probe_result.get("tokens"):
+                token_rows = sparse_probe_result.get("tokens", [])
+                columns = [
+                    "token_index",
+                    "patch_count",
+                    "mean_required_sparsity",
+                    "median_required_sparsity",
+                    "mean_relative_residual",
+                    "residual_hit_ratio",
+                    "dimension",
+                    "irregularity",
+                ]
+                log_dict["sparse_probe/token_stats"] = wandb_module.Table(
+                    columns=columns,
+                    data=[[row.get(column) for column in columns] for row in token_rows],
+                )
+
+        if sparse_volume_curve_result:
+            curve_summary = sparse_volume_curve_result.get("summary", {})
+            for key, value in curve_summary.items():
+                if key == "rows":
+                    continue
+                if isinstance(value, str):
+                    log_dict[f"sparse_volume_curve/{key}"] = value
+                elif isinstance(value, (int, float, np.integer, np.floating)):
+                    value_f = float(value)
+                    log_dict[f"sparse_volume_curve/{key}"] = value_f if math.isfinite(value_f) else np.nan
+            curve_plot = curve_summary.get("plot_path")
+            curve_caption = str(curve_summary.get("interpretation") or "")
+            if curve_plot:
+                try:
+                    log_dict["sparse_volume_curve/volume_curve"] = _wandb_image_with_caption(
+                        wandb_module,
+                        str(curve_plot),
+                        curve_caption,
+                    )
+                    if curve_caption:
+                        log_dict["sparse_volume_curve/caption"] = curve_caption
+                except Exception as e:
+                    print(f"[wandb] skipped sparse_volume_curve plot: {e}")
+            if hasattr(wandb_module, "Table") and sparse_volume_curve_result.get("rows"):
+                curve_rows = sparse_volume_curve_result.get("rows", [])
+                columns = [
+                    "neighborhood_volume",
+                    "max_feature_distance",
+                    "unique_image_count",
+                    "dictionary_atoms",
+                    "dictionary_patch_count",
+                    "mean_required_sparsity",
+                    "median_required_sparsity",
+                    "mean_relative_residual",
+                    "median_relative_residual",
+                    "residual_hit_ratio",
+                ]
+                log_dict["sparse_volume_curve/volume_stats"] = wandb_module.Table(
+                    columns=columns,
+                    data=[[row.get(column) for column in columns] for row in curve_rows],
+                )
 
         pca_image = _wandb_image_or_none(
             wandb_module=wandb_module, key="embeddings/pca_3d",
@@ -789,7 +1033,9 @@ def analyze_fiber_epoch(
         "fiber_summary": fiber_summary,
         "hypothesis_summary": hypothesis_summary,
         "hypothesis_summary_path": hypothesis_path,
+        "fiber_visualization_paths": fiber_visualization_paths,
         "sparse_probe_result": sparse_probe_result,
+        "sparse_volume_curve_result": sparse_volume_curve_result,
         "final_dims": final_dims,
         "final_coords_3d": final_coords_3d,
         "final_tsne_3d": final_tsne_3d,

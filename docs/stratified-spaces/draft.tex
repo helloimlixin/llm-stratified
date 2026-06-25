@@ -1,13 +1,13 @@
 \documentclass{article}
 
 % Submission version:
-% \usepackage{neurips_2026}
+\usepackage{neurips_2026}
 %
 % Final camera-ready version:
 % \usepackage[final]{neurips_2026}
 %
 % Preprint version:
-\usepackage[preprint]{neurips_2026}
+% \usepackage[preprint]{neurips_2026}
 
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -35,199 +35,631 @@
   urlcolor=blue!50!black
 }
 
-\newcommand{\TODO}[1]{\textcolor{red!70!black}{\textbf{TODO:} #1}}
 \newcommand{\dataset}[1]{\textsc{#1}}
 \newcommand{\method}{\textsc{Volume Probe}}
 \newcommand{\fiber}{\textsc{Fiber Bundle Test}}
 \newcommand{\dimhat}{\widehat{d}}
 \newcommand{\irr}{\mathrm{irr}}
 \newcommand{\R}{\mathbb{R}}
-\newcommand{\runroot}{../../../../runs/llm-stratified/20260413_154940_volume_probe_visual_sweep}
+\newcommand{\vol}{\operatorname{vol}}
+\IfFileExists{imgs/neurips_submission/coco_dinov3_huge_fiber_irregularity_heatmap.png}{
+  \newcommand{\figroot}{imgs/neurips_submission}
+}{
+  \newcommand{\figroot}{../imgs/neurips_submission}
+}
+\newcommand{\widepaperfig}[1]{\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{#1}}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
 
 % Avoid page-stretching warnings on float-heavy pages.
 \raggedbottom
 
 \title{Stratified Geometry in Vision Representations}
 \author{
-  Author One \\
-  Affiliation \\
-  City, State / Country \\
-  \texttt{author1@example.com}
-  \And
-  Author Two \\
-  Affiliation \\
-  City, State / Country \\
-  \texttt{author2@example.com}
+  Anonymous Authors \\
+  Paper under double-blind review
 }
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-We study whether continuous raw pixel patches, untrained vision-transformer token spaces, and pretrained visual representations are well modeled by a single smooth manifold. Motivated by recent evidence that language-model token embeddings often violate even a local fiber-bundle null \citep{robinson2025token}, we ask the analogous question for vision: does continuity of pixel coordinates eliminate stratification? We use a local log--log volume-scaling estimator together with a fiber-bundle change-point test to measure local dimension and irregularity across representation spaces. In an 18-run sweep over \dataset{CIFAR10} and \dataset{STL10}, raw-pixel irregularity remains high across the full grid (0.793--0.875), TinyViT tokens are more irregular than matched raw pixels by +0.050 on average, and DINOv2 patch embeddings are consistently smoother than DINOv2 last-layer tokens. These results suggest that continuous ambient coordinates do not remove singular local geometry: raw patch spaces are already strongly stratified, and later representation stages often redistribute or sharpen that structure rather than remove it.
+We test whether dense vision representations are better described by locally stratified geometry than by one global manifold dimension. Building on the fiber-bundle volume-growth test of \citet{robinson2025token}, we analyze frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token clouds on \dataset{COCO}, with \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} stress tests and an auxiliary VAR-d30 generation probe. For each token cloud, we estimate local dimension, corrected slope-increase violations of the fiber-bundle null, same-image locality, and a raw-patch sparse reconstruction burden using OMP; because each token maps back to an image patch, all diagnostics can be inspected spatially. Across models and datasets, local dimension, violation rate, locality, and sparse complexity separate from one another. DINOv3 is highly image-local, SAM is especially sensitive on segmentation-like and out-of-domain structure, and SigLIP2/AIMv2 occupy higher-dimensional local regimes with different sparse-complexity profiles. The main conclusion is simple: modern dense vision spaces contain heterogeneous local structure that a single intrinsic-dimension estimate hides.
 \end{abstract}
 
 \section{Introduction}
-The manifold hypothesis is a common organizing intuition for representation learning, but it can be too coarse to describe spaces whose local geometry changes across scales or neighborhoods. Recent work on token embeddings argues that a local fiber-bundle null is frequently violated in language models \citep{robinson2025token}. The key point is not merely that text tokens are discrete; it is that the learned embedding geometry can violate even a permissive smooth local null. We ask the analogous question for visual representations: if raw pixel patches live in a continuous ambient space, does that continuity actually restore local manifold behavior, or do raw pixels, untrained token spaces, and pretrained visual features still exhibit measurable singular structure? In one important sense, this is a finer-grained test bed than token embeddings: we probe continuous raw patch neighborhoods and vary patch geometry across spatial scale and overlap, rather than analyzing only a fixed discrete vocabulary.
+The \emph{manifold hypothesis} says that high-dimensional data concentrate near a much lower-dimensional set. It is a useful organizing idea, but modern representation spaces often need a more local description. One global intrinsic-dimension estimate can hide neighborhoods whose scaling behavior, effective dimension, or visual content changes from point to point \citep{loaiza-ganem2024deep,levina2005maximum,facco2017estimating,pope2021intrinsic,tempczyk2022lidl,tempczyk2026benchmarks}.
 
-Our focus is empirical and local. Rather than fitting one global intrinsic dimension, we examine nearest-neighbor scaling around each anchor and test whether the corresponding local slope profile is stable or admits statistically meaningful regime changes. This yields both a local dimension estimate and an irregularity score. The central empirical observation is that continuity of the ambient coordinates does not remove stratification: raw vision patch spaces are already strongly stratified, and later representation stages do not uniformly smooth them.
+We therefore treat the manifold hypothesis as a local statistical null rather than as a global slogan. Around each anchor, a regular local model predicts that empirical ball volume should grow like a stable power law in radius, with only the allowed flattening captured by the fiber-bundle formulation. The test asks a directional question: after multiple-testing correction, does a later radius window grow faster than an earlier one? A positive answer marks a local failure of the tested regular model, not a claim that the entire representation is non-manifold.
+
+Recent work on language-token embeddings sharpens this local view: compare each token's log-volume/log-radius curve with a permissive fiber-bundle null, and flag statistically significant slope increases as violations of that null \citep{robinson2025token}. The point is not merely that tokens are discrete. It is that learned neighborhoods can fail even a smooth local model. This paper asks the analogous question for dense vision representations.
+
+Vision gives a cleaner observational handle than a vocabulary table. A transformer or segmentation encoder produces hundreds of patch tokens per image, and each token remains tied to a visible region: an object interior, boundary, texture, occlusion, or background transition. This makes the sampling denser: one image supplies a complete grid of nearby anchors that share scene context while varying in local visual content, so a small aligned image set yields thousands of spatially interpretable local neighborhoods. We can therefore estimate local geometry in feature space and project the result back to the image. That spatial link lets us ask not only whether a representation is locally regular, but where the irregularities occur and whether the corresponding raw patches are visually simple or complex.
+
+We study frozen DINOv3, SAM, SigLIP2, and AIMv2 checkpoints on image-aligned \dataset{COCO} subsets \citep{simeoni2025dinov3,kirillov2023segment,tschannen2025siglip2,elnouby2024aimv2,lin2014microsoft}. We add \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} as domain shifts, and include VAR-d30 as an auxiliary autoregressive vision-token probe \citep{tian2024visual}. The claim is deliberately local and diagnostic: dense vision representations are not well summarized by one global dimension number. Their patch-token geometry is better treated as stratified, with local scaling and reconstruction complexity varying across image regions, models, and datasets.
 
 \paragraph{Contributions.}
 \begin{itemize}[leftmargin=1.5em]
-\item We adapt a local volume-scaling and fiber-bundle test pipeline to raw image patches, untrained TinyViT tokens, and pretrained DINOv2 features.
-\item We run a reproducible 18-run sweep over patch size, stride, dataset, backbone, and layer depth.
-\item We release paper-ready visual diagnostics for every run: dimension/irregularity dashboards, scaling-curve panels, and irregular-anchor nearest-neighbor grids.
-\item We show that raw-pixel spaces are already highly irregular, TinyViT tokens are more irregular than matched raw pixels on average, and DINOv2 patch embeddings are smoother than DINOv2 final-layer tokens in this sweep.
+\item We adapt the fiber-bundle volume-growth test of \citet{robinson2025token} to dense vision patch-token clouds.
+\item We evaluate frozen DINOv3, SAM, SigLIP2, AIMv2, and VAR-d30 spaces on \dataset{COCO}, with stress tests on \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}.
+\item We project local dimension, corrected slope-increase violations, same-image locality, and sparse raw-patch reconstruction burden back to image patches.
+\item We show that these diagnostics separate: global dimension is a poor summary, and patch-projected geometry exposes model- and region-specific stratification.
 \end{itemize}
 
 \section{Method}
-\paragraph{\method.}
-For each anchor representation $z_i \in \R^m$, let $r_k(i)$ be the distance to its $k$th nearest neighbor. We fit a weighted least-squares regression
-\begin{equation}
-  \log k = \beta_0 + \beta_1 \log r_k(i) + \varepsilon_k,
-\end{equation}
-over a fixed neighborhood range $k \in [k_{\min}, k_{\max}]$, and treat $\dimhat_i = \beta_1$ as the local first-regime dimension estimate.
+\paragraph{Overview.}
+The unit of analysis is a spatial patch token. For each frozen model, an image yields token vectors $z_i$ and corresponding raw RGB patches $x_i$. We use this pairing for three diagnostics: local dimension from neighbor-count growth, fiber-bundle violations from forbidden slope increases in the same volume curve, and sparse raw-patch complexity from a local OMP dictionary. These diagnostics are intentionally separate. Local dimension measures feature-space volume growth; fiber violations measure scale changes in that growth; sparse complexity measures visible variation inside the token neighborhood.
 
-\paragraph{\fiber.}
-To detect multiple local scaling regimes, we estimate a local slope profile over the $k$-axis, smooth it, and perform a sliding Welch-style change-point test. For each anchor we retain the minimum local p-value $p_i$ and define
-\begin{equation}
-  \irr_i = -\log_{10}(p_i + 10^{-12}).
-\end{equation}
-We summarize each representation by its mean local dimension and its irregular ratio: the fraction of anchors whose minimum p-value falls below the test threshold.
+\paragraph{Geometric null.}
+Let $Z=\{z_1,\ldots,z_n\}\subset \R^\ell$ be the frozen patch-token cloud. The fiber-bundle null says that a regular neighborhood may flatten as radius grows, but it should not become steeper: a later slope increase means the neighborhood has opened into directions that were not visible locally \citep{robinson2025token}. We do not estimate the reach parameter directly. We use a conservative neighborhood range and interpret corrected slope increases as evidence that this local range is not well described by the tested regular model.
 
-\paragraph{Representation spaces.}
-We compare three families of spaces:
-\begin{itemize}[leftmargin=1.5em]
-\item raw patch pixels extracted from denormalized images,
-\item untrained TinyViT patch embeddings and token outputs \citep{wu2022tinyvit},
-\item frozen DINOv2 patch embeddings and token layers \citep{oquab2023dinov2}.
-\end{itemize}
+\begin{definition}[Embedded patch-token sample]
+For a frozen vision encoder, the embedded sample is the finite set $Z=\{z_i\}_{i=1}^n\subset \R^\ell$ of patch-token vectors. Each $z_i$ has a source image id, a patch-grid coordinate, and a raw image patch $x_i$. Geometric tests use Euclidean distances in feature space; image patches are used for projection and sparse-reconstruction diagnostics.
+\end{definition}
+
+\begin{definition}[Empirical ball volume]
+For an anchor token $z_i$ and radius $r\ge0$, the empirical volume of the feature-space ball is the neighbor count
+\begin{equation}
+  \widehat{V}_i(r)
+  =
+  \left|\{j\ne i:\|z_j-z_i\|_2\le r\}\right|.
+\end{equation}
+Equivalently, if $r_k(i)$ is the distance from $z_i$ to its $k$th nearest neighbor, then $\widehat{V}_i(r_k(i))=k$. Sorted distances supply the radii and sorted indices supply the empirical volumes.
+\end{definition}
+
+\paragraph{Local volume scaling.}
+The dimension estimate comes from the standard small-ball volume expansion used in Riemannian geometry and intrinsic-dimension estimation \citep{gray1974volume,tenenbaum2000global,levina2005maximum,facco2017estimating}. If points are sampled near a locally $d$-dimensional set, then the volume of a small ball grows like
+\begin{equation}
+  \vol(B_r(z_i)) = C_i r^d + O(r^{d+1}),
+\end{equation}
+and the empirical count $\widehat{V}_i(r)$ approximates that local volume. Taking logs gives $\log \widehat{V}_i(r) \approx c_i + d\log r$, so the slope of a log-volume/log-radius curve estimates local dimension. In practice we do not choose radii directly. The pair $(\log r_k(i), \log k)$ traces the empirical volume curve around token $i$.
+
+\begin{definition}[Local dimension estimate]
+Given neighborhood indices $k\in[k_{\min},k_{\max}]$, the local dimension estimate at $z_i$ is the slope
+\begin{equation}
+  \dimhat_i = \widehat{\beta}_{1,i},
+  \qquad
+  \log k = \beta_{0,i}+\beta_{1,i}\log r_k(i)+\varepsilon_{k,i}.
+\end{equation}
+We treat $\dimhat_i$ as a local diagnostic, not as a global manifold dimension. It can vary across tokens in the same image.
+\end{definition}
+
+\begin{theorem}[Fiber-bundle slope rule, after \citet{robinson2025token}]
+\label{thm:fiber-monotone}
+For a local neighborhood that behaves like the fiber-bundle model in \citet{robinson2025token}, the log-volume/log-radius curve may change slope as radius grows, but the slope should stay the same or decrease. A statistically significant slope increase is therefore evidence against the fiber-bundle null.
+\end{theorem}
+
+\paragraph{Fiber violations and irregularity.}
+The local dimension estimate uses one slope as a summary. The fiber test asks whether that slope changes in the direction ruled out by \Cref{thm:fiber-monotone}. We record ordinary change points when the curve changes shape, but count a fiber violation only when the later radius window is steeper than the earlier one.
+
+\begin{definition}[Patch-token irregularity score]
+For each anchor token $z_i$, we scan adjacent windows on its log-volume/log-radius curve and test only the fiber-violating direction: the later window has larger slope than the earlier window. We apply Holm-Bonferroni correction \citep{holm1979simple} to these slope-increase tests, as in \citet{robinson2025token}. Let $p_i^+$ be the smallest adjusted p-value for token $z_i$. The irregularity score is
+\begin{equation}
+  \irr_i =
+  \begin{cases}
+  -\log_{10}(p_i^+), & p_i^+<\alpha,\\
+  0, & p_i^+\ge \alpha.
+  \end{cases}
+\end{equation}
+\end{definition}
+
+Thus $\irr_i$ is zero unless a corrected slope increase is significant; larger values mean stronger evidence for the forbidden direction. The irregular ratio is the fraction of patch tokens with $\irr_i>0$. Heatmaps project this score back to image space.
+
+\paragraph{Local sparse complexity.}
+The sparse probe asks how much raw visual variation lies inside a token neighborhood. Sparse coding and dictionary learning measure whether signals can be represented with a small number of local basis elements \citep{olshausen1996emergence,mairal2009online}. We use Orthogonal Matching Pursuit (OMP) \citep{pati1993orthogonal,tropp2007signal} because it gives an interpretable code length: the number of atoms needed to hit a fixed reconstruction error.
+
+For the fixed-neighborhood probe, $\mathcal{N}_i$ is the set of nearest token neighbors of anchor $i$. We use $k=128$ neighbors, a 128-atom local PCA dictionary, and OMP sparsity cap 64. For each anchor, we collect the corresponding raw image patches $\{x_j:j\in\mathcal{N}_i\}$, center and normalize them, build a dictionary from the leading right singular vectors of the local patch matrix, and reconstruct each patch with OMP. The required sparsity $s_{ij}$ is the smallest support size that reaches target relative residual $\tau$, subject to the cap. The token-level sparse complexity is
+\begin{equation}
+  S_i=\frac{1}{|\mathcal{N}_i|}\sum_{j\in\mathcal{N}_i} s_{ij},
+\end{equation}
+where high $S_i$ means the token neighborhood contains raw patches that are hard to explain with a very sparse local code. We report a strict baseline $\tau=0.15$ and sweep $\tau\in\{0.15,0.20,0.25,0.30,0.35,0.40\}$ to separate regional variation from cap saturation.
+
+We also run an expanding-neighborhood probe for the spatially middle patch token. For volumes $8,16,\ldots,512$, we take the nearest token neighborhood of that size, fit a fresh local dictionary, and rerun OMP. If required sparsity still rises, the effect is not caused by forcing all scales to share one global dictionary.
+
+\paragraph{Reading the visualizations.}
+The visualizations are part of the evidence. Fiber heatmaps project $\irr_i$ back to the source image grid. Dimension galleries show the raw patches selected as low-, middle-, high-dimension, or high-violation examples. Sparse heatmaps project $S_i$ back to image space, and middle-patch volume curves show how OMP sparsity changes as neighborhoods grow. Together they keep local feature-space scaling, corrected slope changes, and raw-patch reconstruction complexity distinct.
 
 \section{Experimental Setup}
-\paragraph{Datasets.}
-We evaluate on \dataset{CIFAR10} \citep{krizhevsky2009learning} and \dataset{STL10} \citep{coates2011analysis}. The sweep is intentionally narrow and should be interpreted as a controlled diagnostic study, not a claim of universal behavior across all image domains.
+\paragraph{Data.}
+The main experiments use \dataset{COCO} images resized to $224\times224$. The goal is not to train or rank classifiers, but to use dense image tokens as a medium for local geometric diagnostics. Patch-size-16 encoders give a $14\times14$ grid, or 196 tokens per image. AIMv2 and VAR use $16\times16$ analysis grids, or 256 tokens per image. Most \dataset{COCO} comparisons use the same 16 image-aligned examples; the DINOv3 ViT-L/16 row uses a preceding 21-image run as a scale comparison.
 
-\paragraph{Sweep structure.}
-The completed run set contains 18 experiments:
-\begin{itemize}[leftmargin=1.5em]
-\item 10 pixel/TinyViT sweep cells across patch sizes 4, 8, and 16 with full-stride and half-stride extraction where applicable,
-\item 8 pretrained-vs-pixel cells covering DINOv2 last-layer tokens, DINOv2 multilayer token slices, and an untrained TinyViT baseline.
-\end{itemize}
-This grid is modest but already sufficient for the paper's main qualitative claim: raw-pixel stratification persists across multiple patch sizes and stride settings. A denser pixel-space sweep would mainly refine where that effect turns on most strongly across spatial scales.
+We run the same frozen-encoder pipeline on \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}. These are stress tests: \dataset{STL10} gives object-centered images, \dataset{DTD} emphasizes textures, and \dataset{EuroSAT} gives satellite scenes. SAM runs outside \dataset{COCO} use frozen image-encoder patch tokens only, without box prompts or mask previews.
 
-\paragraph{Probe hyperparameters.}
-All reported runs use \texttt{max\_tokens=4096}, \texttt{vol\_min=8}, \texttt{vol\_max=128}, \texttt{ws=8}, \texttt{alpha=0.005}, and \texttt{nstrat=3}. Jobs were launched from a frozen snapshot in the \texttt{tinyvit} Conda environment on the \texttt{gpu-redhat} partition; jobs \texttt{51035214} and \texttt{51035215} completed successfully on \texttt{gpuk018}.
+\paragraph{Models for Evaluation.}
+We use ViT-style checkpoints because they expose one vector per image patch \citep{dosovitskiy2021image}. DINOv3 provides strong self-supervised visual features \citep{simeoni2025dinov3}; SAM provides segmentation-oriented encoder tokens and COCO mask previews for context \citep{kirillov2023segment}; SigLIP2 and AIMv2 test modern multimodal dense encoders \citep{tschannen2025siglip2,elnouby2024aimv2}; VAR-d30 is an auxiliary autoregressive visual-token generator rather than a matched encoder baseline \citep{tian2024visual}. All geometry and sparse probes use frozen representations. Table~\ref{tab:checkpoint-settings} gives the exact checkpoints and settings.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Frozen checkpoints and settings used in the COCO experiments. All runs use pretrained encoders and set training epochs to zero for the representation probes.}
+\label{tab:checkpoint-settings}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{0.13\linewidth}p{0.31\linewidth}p{0.18\linewidth}p{0.30\linewidth}@{}}
+\toprule
+Run & Checkpoint & Token sample & Main settings \\
+\midrule
+DINOv3-H+ &
+\texttt{vit\_huge\_plus\_patch16\_}\newline
+\texttt{dinov3.lvd1689m} from \texttt{timm} &
+16 images, 3136 tokens, 1280-d embeddings &
+Patch size 16; image size 224; \texttt{vol\_min=8}, \texttt{vol\_max=64}, \texttt{ws=4}, \texttt{alpha=0.005}; high-capacity residual sweep uses fixed $k=128$, 128 local PCA atoms, and OMP cap 64. \\
+DINOv3-L &
+\texttt{vit\_large\_patch16\_}\newline
+\texttt{dinov3.lvd1689m} from \texttt{timm} &
+21 images, 4116 tokens, 1024-d embeddings &
+Scale-comparison run with the same DINO probe settings and local OMP dictionary configuration. \\
+SAM-H &
+\texttt{facebook/sam-vit-huge} from Hugging Face &
+16 images, 3136 analysis tokens &
+Patch-size-16 analysis grid; \texttt{vol\_min=8}, \texttt{vol\_max=64}, \texttt{ws=8}, \texttt{alpha=0.005}; high-capacity residual sweep uses fixed $k=128$, 128 local PCA atoms, and OMP cap 64; COCO box prompts capped at 16 per image with mask threshold 0.25 for mask previews. \\
+SigLIP2-B &
+\texttt{google/siglip2-base-patch16-224} from Hugging Face &
+16 images, 3136 tokens, 768-d embeddings &
+Patch size 16; image size 224; \texttt{vol\_min=8}, \texttt{vol\_max=64}, \texttt{ws=4}, \texttt{alpha=0.005}; sparse probe uses fixed $k=128$, 128 local PCA atoms, residual target 0.30, and OMP cap 64. \\
+AIMv2-L &
+\texttt{apple/aimv2-large-patch14-224} from Hugging Face &
+16 images, 4096 tokens, 1024-d embeddings &
+Patch size 14; $16\times16$ analysis grid; \texttt{vol\_min=8}, \texttt{vol\_max=64}, \texttt{ws=4}, \texttt{alpha=0.005}; sparse probe uses fixed $k=128$, 128 local PCA atoms, residual target 0.30, and OMP cap 64. \\
+VAR-d30 &
+Autoregressive visual-token checkpoint &
+16 images, 4096 tokens &
+Auxiliary generation-token probe on a $16\times16$ visual-token grid; geometry and sparse probes are reported separately from the encoder comparisons. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Probe settings.}
+The fiber probe uses image-aligned token collection, so every selected image contributes a complete patch grid. Same-image locality uses $k=16$ nearest neighbors. The sparse-complexity sweep uses fixed $k=128$ token neighborhoods, a 128-atom local PCA dictionary, and OMP cap 64 for DINOv3-H+, SAM-H, SigLIP2-B, and AIMv2-L. Each token gets its own local dictionary; the expanding-volume probe also refits the dictionary at each neighborhood size.
 
 \section{Results}
-\subsection{Raw Pixel Patches Are Already Strongly Stratified}
-Across the full raw-pixel grid, irregular ratio stays between 0.793 and 0.875. The strongest raw-pixel condition in this sweep is \dataset{STL10} with patch size 8 and stride 8, which reaches mean dimension 13.20 and irregular ratio 0.875. The smoothest completed raw-pixel condition is \dataset{CIFAR10} with patch size 16 and stride 8, but even there the irregular ratio remains 0.793. Raw patch spaces are therefore not close to a uniformly smooth baseline in any tested condition.
+\subsection{Summary Statistics}
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{\dataset{COCO} pretrained feature probes. ``Change'' counts any significant slope change; ``fiber viol.'' counts only significant slope increases. Sparse complexity reports the high-capacity fixed-$k=128$, $\tau=0.30$ OMP probe with 128 local PCA atoms and sparsity cap 64 when available. The DINOv3-L row is retained as a scale comparison; VAR-d30 is an auxiliary visual-token generation probe.}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Model & Images & Tokens & Mean/med. dim & Change & Fiber viol. & Same-image & Mean $S_i$ \\
+\midrule
+DINOv3 ViT-L/16 & 21 & 4116 & 5.95/5.31 & 0.217 & 0.090 & 0.985 & 15.53 \\
+DINOv3 ViT-H+/16 & 16 & 3136 & 6.61/5.98 & 0.200 & 0.076 & 0.979 & 14.83 \\
+SAM ViT-Huge encoder & 16 & 3136 & 6.24/6.01 & 0.243 & 0.059 & 0.659 & 20.03 \\
+SigLIP2-B & 16 & 3136 & 11.17/9.30 & 0.233 & 0.100 & 0.806 & 14.30 \\
+AIMv2-L & 16 & 4096 & 12.30/10.29 & 0.217 & 0.102 & 0.746 & 12.64 \\
+VAR-d30 & 16 & 4096 & 36.59/36.38 & 0.168 & 0.042 & 0.143 & 13.86 \\
+\bottomrule
+\end{tabular}
+\label{tab:coco-vit-sam}
+\end{table}
+
+The first result is that a single dimension number is too coarse. DINOv3-H+ and SAM-H have similar mean/median local dimensions, 6.61/5.98 and 6.24/6.01, but different locality and change-point structure. SigLIP2-B and AIMv2-L sit in a higher-dimensional regime and have fiber-violation ratios near 0.10. VAR-d30 is higher-dimensional still, yet has the lowest fiber-violation ratio. Local dimension, generic change points, and corrected slope-increase violations are therefore separate signals.
+
+\subsection{Neighborhood Locality}
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Additional \dataset{COCO} local-geometry diagnostics. Same-image statistics use $k=16$ nearest neighbors in feature space. ``Chart'' is the within-image local-chart score, ``multi'' is the fraction of anchors whose scaling curve has more than one detected regime, and the last two columns summarize image-to-image and within-image variation of the local dimension field.}
+\begin{tabular}{@{}lrrrrrrrrr@{}}
+\toprule
+Model & Top-1 same & Mean same & Lift & Chart & Multi & Mean irr. & Max irr. & Image CV & Within std \\
+\midrule
+DINOv3 ViT-L/16 & 1.000 & 0.985 & 20.8 & 0.413 & 0.126 & 0.318 & 6.99 & 0.170 & 2.79 \\
+DINOv3 ViT-H+/16 & 0.998 & 0.979 & 15.7 & 0.377 & 0.113 & 0.270 & 6.63 & 0.191 & 3.12 \\
+SAM ViT-Huge encoder & 0.849 & 0.659 & 10.6 & 0.327 & 0.165 & 0.240 & 9.22 & 0.217 & 3.02 \\
+SigLIP2-B & 0.951 & 0.806 & 13.0 & 0.220 & 0.144 & 0.356 & 7.88 & 0.230 & 8.64 \\
+AIMv2-L & 0.915 & 0.746 & 12.0 & 0.156 & 0.130 & 0.359 & 7.28 & 0.167 & 8.75 \\
+VAR-d30 & 0.225 & 0.143 & 2.3 & 0.145 & 0.096 & 0.152 & 8.00 & 0.070 & 8.46 \\
+\bottomrule
+\end{tabular}
+\label{tab:coco-vit-sam-local}
+\end{table}
+
+Neighborhood locality shows what the volume-growth test is sampling. DINOv3 is extremely image-local, with DINOv3-L/H+ mean same-image neighbor fractions of 0.985 and 0.979. SAM-H is less image-local (0.659) but still 10.6$\times$ above chance. SigLIP2-B and AIMv2-L remain far above chance while mixing more than DINOv3. VAR-d30 is qualitatively different, with same-image fraction 0.143, consistent with a generation-token space rather than a frozen encoder neighborhood.
+
+Same-image locality does not say whether token distances preserve raw-patch distances inside an image. We therefore also compare the pairwise distance matrix of raw RGB patches with the pairwise distance matrix of the corresponding model tokens; details and visualizations are in \Cref{app:patch-token-distance}. This diagnostic asks how much the learned feature metric warps the image's original patch geometry. A high score means that patches near an anchor in raw RGB space also tend to be near it in token space. A low score does not mean failure: it can mean that the representation has reorganized patches according to semantics, context, segmentation cues, or invariances that are not visible in raw pixel distance. In the current \dataset{COCO} runs, SAM-H preserves more within-image raw-patch distance structure than DINOv3-H+, while SigLIP2-B and AIMv2-L move furthest away from raw RGB patch geometry.
+
+The next plot groups are a visual audit. Irregularity heatmaps show where the fiber-bundle slope rule fails after correction. Dimension galleries show the raw patches selected by the estimator. Dimension heatmaps show whether local dimension is spatially coherent. These are different quantities: high dimension means fast first-regime neighbor growth, while high irregularity means the volume curve bends in the forbidden direction.
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dinov3_huge_fiber_irregularity_heatmap}
+\caption{\dataset{COCO} fiber-bundle violations projected back to image patches for DINOv3 ViT-H+/16. Each square is one patch token placed at its original image location. Bright overlays mark tokens whose local volume curve becomes significantly steeper at a larger radius, after Holm-Bonferroni correction; dark regions either have no detected slope increase or do not survive correction.}
+\label{fig:coco-fiber-heatmaps}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_sam_fiber_irregularity_heatmap}
+\caption{\dataset{COCO} fiber-bundle violations projected back to image patches for SAM ViT-Huge. This is the same diagnostic as the preceding DINOv3 panel: it is not a saliency map or a class-confidence map, but a map of where the representation neighborhood stops behaving like the tested fiber-bundle null.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dinov3_huge_dimension_patch_gallery}
+\caption{Patch crops grouped by low, middle, high first-regime local dimension and highest slope-increase violation score for DINOv3 ViT-H+/16. Each crop is the raw image patch corresponding to a token selected by the geometric estimator.}
+\label{fig:coco-dimension-patches}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_sam_dimension_patch_gallery}
+\caption{Patch crops grouped by low, middle, high first-regime local dimension and highest slope-increase violation score for SAM ViT-Huge. Low-dimensional crops are often visually simple or locally homogeneous, while high-dimensional crops often include boundaries, texture mixtures, or partial objects. The irregularity row is selected by corrected slope-increase evidence, not by first-regime dimension alone.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dinov3_huge_fiber_dimension_heatmap}
+\caption{Local dimension field for DINOv3 ViT-H+/16. Each colored square is one patch token, with color set by the first-regime log-volume/log-radius slope. DINOv3-H+ shows strong within-image coherence: many neighboring patches share similar estimated dimension, consistent with its very high same-image nearest-neighbor rate.}
+\label{fig:coco-dimension-heatmaps}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_sam_fiber_dimension_heatmap}
+\caption{Local dimension field for SAM ViT-Huge. SAM-H has a visually more mixed field, matching the quantitative result that it crosses image boundaries earlier while still preserving object- and boundary-relevant locality. These heatmaps should be read together with \Cref{fig:coco-fiber-heatmaps}: high dimension is not the same as high irregularity.}
+\end{figure}
+
+\Cref{fig:coco-fiber-heatmaps,fig:coco-dimension-patches,fig:coco-dimension-heatmaps} show that geometry is not uniform inside an image: nearby regions can have different local dimension and different violation evidence. DINOv3 appears more image-local and spatially coherent, while SAM shows more cross-image mixing and patch-to-patch variation, consistent with a segmentation representation that groups recurring boundaries and foreground/background transitions.
+
+\subsection{Volume Curves and Sparse Complexity}
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Expanding-neighborhood OMP probe for the image-aligned DINOv3-H+/SAM runs. For the spatially middle patch token, we increase neighborhood volume and fit a fresh local raw-patch dictionary at each volume. ``Images'' counts how many source images enter the token neighborhood, $\bar S$ is the mean required OMP sparsity, and ``hit'' is the fraction of patches reaching residual threshold $\tau=0.15$ before the sparsity cap.}
+\begin{tabular}{@{}rrrrrrr@{}}
+\toprule
+Volume & DINO images & DINO $\bar S$ & DINO hit & SAM images & SAM $\bar S$ & SAM hit \\
+\midrule
+8 & 1 & 4.62 & 1.00 & 1 & 4.50 & 1.00 \\
+16 & 1 & 8.75 & 1.00 & 2 & 7.12 & 1.00 \\
+32 & 1 & 14.91 & 1.00 & 2 & 9.66 & 1.00 \\
+64 & 1 & 22.22 & 0.83 & 3 & 14.47 & 0.25 \\
+128 & 3 & 22.89 & 0.15 & 5 & 15.89 & 0.10 \\
+256 & 4 & 21.54 & 0.20 & 9 & 15.11 & 0.16 \\
+512 & 8 & 19.42 & 0.28 & 10 & 14.65 & 0.18 \\
+\bottomrule
+\end{tabular}
+\label{tab:coco-volume-sparse}
+\end{table}
+
+The sparse probe asks whether feature-space neighborhoods also contain simple raw visual neighborhoods. We use the higher-capacity $k=128$ setting because the initial $k=32$ probe was too capacity-limited for SAM. If neighborhoods remain hard under this setting, they are not hard merely because the dictionary is tiny.
+
+The high-capacity sweep confirms that sparse complexity is not just cap saturation. At $\tau=0.15$, DINOv3-H+ requires 34.67 atoms on average and SAM-H requires 42.05. At $\tau=0.30$, both models avoid cap hits while retaining regional variation: 14.83 atoms for DINOv3-H+ and 20.03 for SAM-H. We use $\tau=0.30$ for the main heatmaps.
 
 \begin{table}[H]
 \centering
-\caption{Representative raw-pixel results from the completed visual sweep.}
-\begin{tabular}{lcccc}
+\scriptsize
+\caption{High-capacity residual-threshold sweep for fixed-$k=128$ local OMP probes with 128 local PCA atoms and sparsity cap 64. The dictionary and neighborhoods are held fixed; only the target relative residual $\tau$ changes. ``Patch cap'' is the fraction of individual patch reconstructions that exhaust the allowed sparsity cap.}
+\begin{tabular}{@{}rccrccr@{}}
 \toprule
-Dataset & Patch size & Stride & Mean dim & Irregular ratio \\
+$\tau$ & DINO $\bar S$ & DINO q10--q90 & DINO patch cap & SAM $\bar S$ & SAM q10--q90 & SAM patch cap \\
 \midrule
-CIFAR10 & 4 & 4 & 8.18 & 0.833 \\
-CIFAR10 & 8 & 8 & 11.36 & 0.825 \\
-STL10 & 8 & 4 & 14.97 & 0.873 \\
-STL10 & 16 & 16 & 16.00 & 0.861 \\
+0.15 & 34.67 & 24.61--45.35 & 0.2\% & 42.05 & 30.27--52.51 & 3.1\% \\
+0.20 & 25.75 & 17.04--34.94 & 0.0\% & 32.65 & 21.99--42.21 & 0.3\% \\
+0.25 & 19.41 & 12.20--27.10 & 0.0\% & 25.50 & 16.20--34.04 & 0.0\% \\
+0.30 & 14.83 & 9.08--21.03 & 0.0\% & 20.03 & 11.97--27.46 & 0.0\% \\
+0.35 & 11.49 & 6.99--16.44 & 0.0\% & 15.80 & 9.04--22.13 & 0.0\% \\
+0.40 & 9.01 & 5.47--12.91 & 0.0\% & 12.51 & 7.00--17.78 & 0.0\% \\
 \bottomrule
 \end{tabular}
-\label{tab:raw}
+\label{tab:sparse-residual-sweep}
 \end{table}
 
-\subsection{Overlap Does Not Dominate the Geometry}
-Half-stride overlap does not act as a simple smoothing or sharpening mechanism. Compared with matched full-stride extraction, overlap increases irregularity in only 1 of 4 matched dataset/patch comparisons. The largest increase occurs on \dataset{STL10} patch 16 (0.861 $\rightarrow$ 0.873), while \dataset{CIFAR10} patch 16 shows a slight decrease (0.807 $\rightarrow$ 0.793). The effect is therefore secondary relative to the broader stratification already present in the raw spaces.
+The expanding-neighborhood probe stress-tests raw-patch complexity. DINOv3-H+ stays within one source image up to volume 64, while its required sparsity rises from $\bar S=4.62$ to $\bar S=22.22$. SAM-H crosses images earlier, but rises more slowly, from $\bar S=4.50$ to $\bar S=14.47$. At larger volumes both models hit the dictionary budget, so the tail is a capacity warning rather than a precise estimate.
 
-\subsection{TinyViT Tokens Are More Irregular Than Matched Raw Pixels}
-Across the pure pixel sweep, TinyViT token irregularity is +0.050 higher than the matched raw-pixel probe on average. This gap is pronounced in \dataset{CIFAR10} patch 4 (0.949 versus 0.833) and \dataset{STL10} patch 8 (0.944 versus 0.875). In this sweep, the untrained token geometry appears to sharpen or separate local modes rather than smooth them away.
-
-\begin{figure}[H]
+\begin{figure}[p]
 \centering
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pixel_stratification_sweep/stl10_ps8_stride8/volume_probe/detail_patch_pixels.png}
-  \caption{Raw patch pixels}
-\end{subfigure}
-\hfill
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pixel_stratification_sweep/stl10_ps8_stride8/volume_probe/detail_tokens.png}
-  \caption{TinyViT tokens}
-\end{subfigure}
-\caption{Example dashboard pair from \dataset{STL10}, patch size 8, stride 8. The generated run artifacts already provide dimension histograms, irregularity histograms, and PCA colorings for each representation.}
-\label{fig:raw-vs-token}
+\widepaperfig{\figroot/coco_dinov3_huge_fiber_volume_curve_gallery}
+\caption{Representative DINOv3 ViT-H+/16 fiber-bundle volume curves projected back to their source image patches. Each row pairs a raw patch crop with its log neighbor-count versus log-radius curve. A nearly straight curve means one local dimension is a reasonable summary over the plotted radius range; a curve that steepens after a detected change point is the fiber violation.}
+\label{fig:coco-volume-curves}
 \end{figure}
 
-\subsection{DINOv2 Patch Embeddings Are Smoother Than DINOv2 Final Tokens}
-The pretrained sweep shows a clear split between DINOv2 patch embeddings and DINOv2 final-layer tokens. Last-layer DINOv2 tokens are never less irregular than their matched raw-pixel probes in any of the six completed DINO runs. Averaged over those runs, matched raw-pixel irregularity is 0.852, while DINO token irregularity is 0.897. DINO patch embeddings, by contrast, are substantially smoother on both datasets: 0.804 on \dataset{CIFAR10} and 0.814 on \dataset{STL10}.
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_sam_fiber_volume_curve_gallery}
+\caption{Representative SAM ViT-Huge fiber-bundle volume curves projected back to source image patches. The same slope rule is used as in the DINOv3 panel: flattening is allowed by the tested fiber-bundle null, while significant steepening indicates that the token suddenly starts seeing additional directions in feature space.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_sparse_residual_sweep_hicap_comparison}
+\caption{Residual-threshold sensitivity for the high-capacity fixed-$k=128$ local sparse dictionary probe. DINOv3-H+ and SAM-H both relax smoothly as the residual target is loosened. The important difference from the original low-capacity setting is that SAM no longer saturates: the 64-atom cap is rarely hit even at the strict $\tau=0.15$ target.}
+\label{fig:coco-sparse-residual-sweep}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_dinov3_huge_hicap_tau_0p30_sparse_dictionary_heatmaps}
+\caption{DINOv3 ViT-H+/16 patch-projected mean OMP sparsity for fixed $k=128$ neighborhoods at $\tau=0.30$, using one 128-atom local PCA dictionary per anchor and sparsity cap 64. Brighter patches need more dictionary atoms to reach the same residual target, so their feature-space neighborhood contains more diverse raw visual content.}
+\label{fig:coco-sparse}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_sam_hicap_tau_0p30_sparse_dictionary_heatmaps}
+\caption{SAM ViT-Huge patch-projected mean OMP sparsity for fixed $k=128$ neighborhoods at $\tau=0.30$, using the same 128-atom local PCA dictionary and cap-64 protocol as the preceding DINOv3 panel. The high-capacity setting is especially important for SAM because the original low-capacity setting hid regional variation behind cap saturation.}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_dinov3_huge_local_dictionary_volume_curve}
+\caption{DINOv3 ViT-H+/16 middle-patch sparse-complexity volume curve. Neighborhood volume is increased while fitting a fresh local dictionary at each volume. Rising curves mean the neighborhood is becoming harder to summarize visually as more feature neighbors are included.}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_sam_local_dictionary_volume_curve}
+\caption{SAM ViT-Huge middle-patch sparse-complexity volume curve, using the same fresh-dictionary-per-volume protocol as the DINOv3 panel.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_dinov3_huge_hicap_tau_0p30_sparse_dictionary_probe}
+\caption{DINOv3 ViT-H+/16 high-capacity sparse-probe dashboard at $\tau=0.30$. The dashboard summarizes the full fixed-$k=128$ sparse coding field behind \Cref{fig:coco-sparse}. DINOv3-H+ evaluates all 3136 tokens with a 128-atom local dictionary and a 64-atom cap, giving mean required sparsity 14.83 and 10--90\% range 9.08--21.03.}
+\label{fig:coco-sparse-dashboards}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_sam_hicap_tau_0p30_sparse_dictionary_probe}
+\caption{SAM ViT-Huge high-capacity sparse-probe dashboard at $\tau=0.30$. SAM-H evaluates all 3136 tokens with a 128-atom local dictionary and a 64-atom cap, giving mean required sparsity 20.03 and 10--90\% range 11.97--27.46. Sparse reconstruction burden is a separate local signal rather than a disguised dimension or irregularity score.}
+\end{figure}
+
+Sparse plots bridge feature geometry and visible image content. High local dimension means neighbors grow quickly in feature space; high sparse complexity means the corresponding raw patches require many atoms to reconstruct. The two can coincide, but need not.
+
+\clearpage
+
+\subsection{Additional Vision Encoders}
+SigLIP2-B and AIMv2-L extend the pipeline beyond the DINOv3/SAM contrast. Both preserve strong same-image locality, but less than DINOv3. Both also have higher local dimensions than DINOv3/SAM and the highest fiber-violation ratios in the encoder set. This is not a model-quality ranking; it shows that the diagnostic is sensitive to different representational organizations.
+
+The sparse residual sweep adds the counterpoint: at $\tau=0.30$, SigLIP2-B requires 14.30 atoms on average and AIMv2-L requires 12.64. These values are comparable to DINOv3-H+ and below SAM-H, despite higher local dimensions and fiber-violation ratios.
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_vision_expansion_residual_sweep_comparison}
+\caption{Residual-threshold sensitivity for the additional SigLIP2-B and AIMv2-L fixed-$k=128$ local sparse dictionary probes. Both models use 128 local PCA atoms and OMP cap 64. The smooth decline in required atoms as $\tau$ is relaxed shows that the selected $\tau=0.30$ visualizations are not dominated by cap saturation.}
+\label{fig:coco-vision-expansion-residual-sweep}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_fiber_irregularity_heatmap}
+\caption{SigLIP2-B fiber-bundle violations projected back to the 16 \dataset{COCO} images. SigLIP2 has higher mean local dimension than DINOv3/SAM and a 0.100 fiber-violation ratio, making it a useful multimodal-encoder stress test for the same stratified-geometry pipeline.}
+\label{fig:coco-siglip-aim-geometry}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_fiber_irregularity_heatmap}
+\caption{AIMv2-L fiber-bundle violations projected back to the 16 \dataset{COCO} images. AIMv2 uses a $16\times16$ analysis grid, so it contributes 4096 tokens rather than 3136.}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_sparse_dictionary_heatmaps}
+\caption{SigLIP2-B patch-projected mean OMP sparsity for fixed $k=128$ neighborhoods at $\tau=0.30$. The local dictionary protocol is the same as the DINOv3/SAM high-capacity probe.}
+\label{fig:coco-siglip-aim-sparse}
+\end{figure}
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_sparse_dictionary_heatmaps}
+\caption{AIMv2-L patch-projected mean OMP sparsity for fixed $k=128$ neighborhoods at $\tau=0.30$. AIMv2 has high estimated local dimension, but its local raw-patch sparse complexity is lower than SAM-H under this OMP protocol.}
+\end{figure}
+
+\clearpage
+
+\subsection{Cross-Dataset Stress Tests}
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\caption{Cross-dataset frozen-encoder stress tests on \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}. Each row uses the same patch-token geometry pipeline as the \dataset{COCO} runs. ``Same'' is the mean same-image nearest-neighbor fraction at $k=16$. Mean $S_i$ is the fixed-neighborhood OMP sparse-complexity score from the local dictionary probe. SAM rows on these datasets use frozen SAM encoder tokens only; no box prompts or mask previews are available.}
+\label{tab:cross-dataset-stress}
+\begin{tabular}{@{}llrrrrrr@{}}
+\toprule
+Dataset & Model & Tokens & Mean/med. dim & Change & Fiber viol. & Same & Mean $S_i$ \\
+\midrule
+\dataset{STL10} & DINOv3-H+ & 3136 & 6.44/5.73 & 0.203 & 0.069 & 0.994 & 11.03 \\
+\dataset{STL10} & SAM-H & 3136 & 5.46/4.89 & 0.278 & 0.090 & 0.704 & 13.50 \\
+\dataset{STL10} & SigLIP2-B & 3136 & 7.94/6.49 & 0.207 & 0.081 & 0.834 & 10.05 \\
+\dataset{STL10} & AIMv2-L & 4096 & 9.00/7.86 & 0.211 & 0.086 & 0.739 & 7.59 \\
+\dataset{DTD} & DINOv3-H+ & 3136 & 6.39/6.09 & 0.169 & 0.067 & 0.858 & 6.29 \\
+\dataset{DTD} & SAM-H & 3136 & 6.09/5.75 & 0.235 & 0.037 & 0.829 & 22.92 \\
+\dataset{DTD} & SigLIP2-B & 3136 & 9.21/8.59 & 0.179 & 0.074 & 0.732 & 7.24 \\
+\dataset{DTD} & AIMv2-L & 4096 & 9.58/9.15 & 0.186 & 0.069 & 0.620 & 6.55 \\
+\dataset{EuroSAT} & DINOv3-H+ & 3136 & 8.45/7.55 & 0.173 & 0.053 & 0.974 & 16.17 \\
+\dataset{EuroSAT} & SAM-H & 3136 & 4.03/3.00 & 0.425 & 0.172 & 0.841 & 27.85 \\
+\dataset{EuroSAT} & SigLIP2-B & 3136 & 10.87/10.26 & 0.175 & 0.058 & 0.414 & 4.94 \\
+\dataset{EuroSAT} & AIMv2-L & 4096 & 12.55/11.75 & 0.171 & 0.056 & 0.327 & 3.49 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cross-dataset results keep the same story but change the details. On \dataset{STL10}, DINOv3-H+ remains almost perfectly image-local, while SAM-H has the highest change-point and fiber-violation ratios. On \dataset{DTD}, texture neighborhoods are sparse-simple for DINOv3, SigLIP2, and AIMv2, but not for SAM. On \dataset{EuroSAT}, SAM-H is the clearest stress case: low median local dimension, high change rate, high corrected fiber-violation ratio, and the largest sparse burden. The useful point is not a single ranking; local dimension, violations, locality, and sparse complexity respond differently to domain shift.
+
+\clearpage
+
+\subsection{SAM Mask Context}
+\begin{figure}[H]
+\centering
+\widepaperfig{\figroot/coco_sam_box_masks}
+\caption{SAM ViT-Huge box-prompt mask previews on \dataset{COCO}. The $4\times4$ grid follows the same 16 image-aligned examples used for the token-level probes. The overlays show COCO box prompts, thresholded SAM masks when available, and the analysis patch grid. The masks are not used as labels for the fiber estimator; they only provide object-aligned context for interpreting where SAM's encoder-token geometry may be responding to object interiors, contours, or background transitions.}
+\label{fig:coco-sam-masks}
+\end{figure}
+
+SAM turns the dense-vision framing into an object-aligned one. \dataset{COCO} boxes generate mask previews from the same model whose encoder tokens we analyze. The statistics still come from encoder-token neighborhoods, not mask quality, but the masks help relate geometric structure to object interiors, boundaries, and background.
+
+\clearpage
+
+\subsection{Patch-Size Sensitivity}
+Patch size has two meanings in these experiments. The ViT/SAM architectural patch size is fixed by the pretrained checkpoint, while the \emph{analysis patch size} controls the spatial grid on which encoder features are pooled and projected back to the image. We therefore ran a small geometry-only SAM ViT-Huge sensitivity sweep over analysis patch sizes 8, 16, and 32 pixels on the same 16 \dataset{COCO} images. Sparse OMP and mask previews were disabled for this sweep, so this patch-size table has no dictionary-size hyperparameter and isolates the geometry of the pooled token grid.
 
 \begin{table}[H]
 \centering
-\small
-\caption{DINOv2 comparison on the completed sweep.}
-\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.23\linewidth}cc>{\raggedright\arraybackslash}p{0.28\linewidth}@{}}
+\scriptsize
+\caption{SAM ViT-Huge patch-size sensitivity on the same 16 \dataset{COCO} images. Patch size here means analysis-grid patch size after pooling the frozen SAM image-encoder feature map, not a different SAM checkpoint.}
+\begin{tabular}{@{}rrrrrrrr@{}}
 \toprule
-Dataset & Representation & Mean dim & Irreg. ratio & Interpretation \\
+Patch & Grid & Tokens & Mean/med. dim & Change & Fiber viol. & Same-image & Local chart \\
 \midrule
-CIFAR10 & DINO last-layer tokens & 5.10 & 0.900 & more irregular than raw and patch embeddings \\
-CIFAR10 & DINO patch embeddings & 10.36 & 0.804 & smoother than last-layer tokens \\
-STL10 & DINO last-layer tokens & 5.62 & 0.895 & more irregular than raw and patch embeddings \\
-STL10 & DINO patch embeddings & 25.91 & 0.814 & smoother than last-layer tokens \\
+8  & $28\times28$ & 12544 & 9.47/8.78 & 0.266 & 0.090 & 0.727 & 0.306 \\
+16 & $14\times14$ & 3136  & 6.24/6.01 & 0.243 & 0.059 & 0.659 & 0.327 \\
+32 & $7\times7$   & 784   & 3.88/3.97 & 0.319 & 0.098 & 0.547 & 0.443 \\
 \bottomrule
 \end{tabular}
-\label{tab:dino}
+\label{tab:sam-patch-size-sweep}
 \end{table}
 
-\subsection{Layer Depth Reorganizes, Rather Than Monotonically Smooths, Geometry}
-In the two completed multilayer DINO runs, irregularity increases from layer 03 to layer 06 to the final layer: 0.800 $\rightarrow$ 0.855 $\rightarrow$ 0.900 on \dataset{CIFAR10}, and 0.808 $\rightarrow$ 0.828 $\rightarrow$ 0.895 on \dataset{STL10}. In this sweep, deeper layers make the final token space more singular rather than less.
+The trend is useful but not benchmark-level. Finer 8-pixel patches produce more tokens and higher estimated local dimension; coarser 32-pixel patches reduce local dimension but increase detected slope changes and fiber violations. The signal is therefore not an artifact of exactly one $14\times14$ grid.
 
-\begin{figure}[H]
+\clearpage
+
+\subsection{Auxiliary Autoregressive Generation Probe}
+We include VAR-d30 as an auxiliary \dataset{COCO} probe, not as a matched encoder baseline \citep{tian2024visual}. It operates on a $16\times16$ grid of discrete visual codes and asks a narrower question: whether fiber irregularity in a generative token space lines up with generation uncertainty or branch diversity.
+
+\begin{table}[H]
 \centering
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pretrained_pixel_sweep/stl10_dinov2_multilayer_full/volume_probe/detail_patch_embeddings.png}
-  \caption{DINO patch embeddings}
-\end{subfigure}
-\hfill
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pretrained_pixel_sweep/stl10_dinov2_multilayer_full/volume_probe/detail_tokens_layer_last.png}
-  \caption{DINO last-layer tokens}
-\end{subfigure}
+\scriptsize
+\caption{Auxiliary VAR-d30 \dataset{COCO} generation probe from W\&B run \texttt{skt3dcv6}. The model emits discrete visual-token predictions. Entropy, negative log-likelihood (NLL), top-1 probability, and margin are measured from the next-token distribution; fiber statistics are computed on the same token representations as in the other runs.}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Model & Images & Tokens & Grid & Mean/med. dim & Change & Fiber viol. & Mean $S_i$ \\
+\midrule
+VAR-d30 generator & 16 & 4096 & $16\times16$ & 36.59/36.38 & 0.168 & 0.042 & 13.86 \\
+\bottomrule
+\end{tabular}
+\label{tab:coco-var}
+\end{table}
 
-\medskip
+VAR-d30 looks different from the encoder spaces. Its same-image neighbor fraction is only 0.143, far below the frozen encoders. Its local dimension is much higher, with mean/median 36.59/36.38, but its fiber-violation ratio is lower at 0.042. High local dimension therefore does not imply many slope-increase violations.
 
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pretrained_pixel_sweep/stl10_dinov2_multilayer_full/volume_probe/scaling_patch_embeddings.png}
-  \caption{Patch-embedding scaling curves}
-\end{subfigure}
-\hfill
-\begin{subfigure}[t]{0.49\linewidth}
-  \centering
-  \includegraphics[width=\linewidth]{\runroot/pretrained_pixel_sweep/stl10_dinov2_multilayer_full/volume_probe/scaling_tokens_layer_last.png}
-  \caption{Last-layer scaling curves}
-\end{subfigure}
-\caption{Representative DINOv2 diagnostics from the completed sweep on \dataset{STL10}. Patch embeddings are visibly smoother than the final token layer in both irregularity dashboards and selected scaling-curve panels.}
-\label{fig:dino}
+Under teacher forcing, corrected fiber violations do not predict higher generation uncertainty. Fiber-violating tokens have slightly lower normalized entropy than non-violating tokens ($-0.017$, permutation $p=0.016$), and the high-irregularity decile does not transfer cleanly to NLL. Local dimension is the stronger generation-side signal: the high-dimension decile has lower entropy ($-0.091$, $p<10^{-4}$) and lower NLL ($-0.873$, $p<10^{-4}$). After rank-residualizing on irregularity, image id, row, and column, dimension retains larger partial Spearman correlations than irregularity.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Aggregate teacher-forced generation diagnostics for VAR-d30 on \dataset{COCO}. Differences are first group minus second group. P-values are two-sided permutation tests over token-level metrics. Entropy is normalized by $\log$ vocabulary size.}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Comparison & $\Delta$ entropy & $p$ & $\Delta$ NLL & $p$ \\
+\midrule
+Fiber violation vs. no violation & -0.017 & 0.016 & -0.215 & 0.167 \\
+High vs. low irregularity decile & -0.010 & 0.106 & +0.085 & 0.542 \\
+High vs. low dimension decile & -0.091 & $<10^{-4}$ & -0.873 & $<10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\label{tab:coco-var-generation}
+\end{table}
+
+The VAR plots are therefore a negative control for a too-simple singularity-to-polysemy story. Dimension, irregularity, and generation uncertainty do not light up in the same places: dimension is broadly high and predictive of uncertainty, irregularity is sparse, and fiber violations alone do not robustly predict local generation ambiguity.
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_var_d30_fiber_dimension_heatmap}
+\caption{VAR-d30 local dimension heatmap from W\&B run \texttt{skt3dcv6}. Many tokens live in a high-dimensional first-regime neighborhood; this measures fast local neighbor growth and should not be read as the same quantity as fiber irregularity.}
+\label{fig:coco-var-geometry}
 \end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_d30_fiber_irregularity_heatmap}
+\caption{VAR-d30 fiber-irregularity heatmap. Only a smaller subset of tokens has corrected slope-increase evidence, meaning the local volume curve changes in the forbidden direction across radii.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_d30_dimension_patch_gallery}
+\caption{VAR-d30 patch crops selected by the local dimension and irregularity diagnostics. Showing this gallery at full page width makes the token-level statistics inspectable as visible image content rather than only as numeric scores.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_d30_sparse_dictionary_probe}
+\caption{VAR-d30 sparse-probe dashboard. The fixed-$k$ sparse-coding view is a complementary raw-patch complexity diagnostic, not the same color scale or phenomenon as local dimension or fiber irregularity.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_aggregate_bins}
+\caption{Aggregate VAR-d30 generation diagnostics across all 4096 teacher-forced visual tokens. Left/middle: next-token entropy and NLL binned by local dimension decile. Right: entropy and NLL grouped by fiber-violation strength. The main signal is broad dimension variation, not corrected fiber violations alone.}
+\label{fig:coco-var-generation-aggregate}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_entropy_heatmaps}
+\caption{VAR-d30 predictive-entropy heatmaps from W\&B run \texttt{skt3dcv6}. Entropy is projected back to image-token positions. Bright uncertainty means the generator is less confident about the next visual code, not that the token is geometrically irregular.}
+\label{fig:coco-var-generation}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_nll_heatmaps}
+\caption{VAR-d30 negative-log-likelihood heatmaps. Like entropy, this is a generation uncertainty diagnostic rather than a fiber-irregularity score.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_patch_gallery}
+\caption{VAR-d30 patch-token gallery for the generation probe. These crops make the selected generator tokens visible so the uncertainty and geometry diagnostics can be read against image content.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\ContinuedFloat
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_scatter}
+\caption{VAR-d30 geometry/generation scatter. The run-level correlations are weak for irregularity versus generation uncertainty: Pearson Corr($\irr$, entropy) $=-0.033$ and Corr($\irr$, NLL) $=-0.020$. Dimension is more informative for this run, with Spearman Corr($\dimhat$, entropy) $=-0.303$ and Corr($\dimhat$, NLL) $=-0.122$.}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_var_generation_polysemy_branch_samples}
+\caption{Branch samples for matched fiber-violating and control tokens from the 16-image VAR-d30 rerun. Across four matched pairs, singular anchors have higher mean pairwise crop diversity than controls (ratio 2.19), but the sign test is not significant with only four pairs ($p=1.0$). Branch-probability entropy is slightly lower for singular anchors on average. This remains an exploratory diagnostic: it suggests that generation branching should be tested over many more anchors and with stronger image-level diversity metrics rather than inferred from one visually interesting token.}
+\label{fig:coco-var-branch}
+\end{figure}
+\clearpage
 
 \section{Discussion}
-Three points stand out. First, raw pixel spaces are already highly stratified, so the interesting question is not whether learned models ``break'' a smooth manifold but how they redistribute singular structure already present in the data. This is the direct image-space analogue of the observation in \citet{robinson2025token}: continuity of the coordinates does not guarantee a locally smooth or even fiber-bundle-like data geometry. Moreover, the present image-space setting is arguably finer-grained than the token-embedding setting because it probes continuous local neighborhoods and multiple patch geometries rather than only a fixed vocabulary embedding. Second, tokenization does not automatically smooth local geometry: the untrained TinyViT tokens are more irregular than matched raw pixels on average. Third, the DINOv2 comparison shows that smoothing can happen at the patch-embedding stage even when later token layers become more singular again.
+Dense vision representations let us test stratified geometry at patch resolution. Each token is both a point in representation space and a visible region in an image, which lets us separate facts that a global intrinsic-dimension estimate would collapse.
 
-This interpretation is broadly aligned with recent work arguing that local neighborhood structure in learned token spaces often violates manifold-style null hypotheses \citep{robinson2025token}. The present results extend that intuition into vision and suggest that local singularity diagnostics are useful even before training or semantic supervision.
+The core pattern is stable. DINOv3 and SAM have similar median local dimension on \dataset{COCO}, but differ in same-image locality and slope-change structure. SigLIP2 and AIMv2 move the comparison into a higher-dimensional regime while preserving strong locality. Cross-dataset probes show that the diagnostic changes with visual domain: \dataset{DTD} is sparse-simple for several encoders but not SAM, while \dataset{EuroSAT} makes SAM's corrected fiber violations and sparse burden stand out. A generic change point is not the same as a fiber violation, and sparse raw-patch reconstruction is not the same as local dimension. The VAR-d30 probe adds a useful caution: generation uncertainty aligns more with broad local dimension than with corrected fiber violations.
+
+The restrained claim is enough: modern pretrained vision checkpoints exhibit heterogeneous local geometry, so a single global dimension estimate is a poor summary. This is a diagnostic case study of stratified structure in dense vision spaces, not a final benchmark over all vision models or domains.
 
 \section{Limitations}
-This is still a narrow study. It covers only two datasets, one untrained TinyViT configuration, and one pretrained DINOv2 backbone. The local dimension estimator depends on the selected $k$-range and metric, and the qualitative figures are diagnostic rather than proof. The current probe detects geometric irregularity, not semantics or causality by itself. A denser raw-pixel sweep could localize the onset scale of stratification more precisely, but the present experiments already show that the effect is not confined to a single patch geometry. A stronger paper should expand the dataset range, study training dynamics directly, and compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}.
+The study is intentionally small. The main comparison uses 16 image-aligned \dataset{COCO} images and a limited set of large pretrained checkpoints; the \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} runs are stress tests, not benchmark-scale studies; and VAR-d30 is auxiliary rather than a matched encoder baseline. The local dimension estimator depends on neighborhood range, distance metric, smoothing, and multiple-testing correction. The sparse dictionary probe depends on dictionary size, sparsity cap, and residual threshold. SAM masks provide useful context on \dataset{COCO}, but the fiber statistics are computed from encoder tokens rather than mask quality; outside detection datasets, SAM should be read only as a frozen encoder. A stronger version should scale the image count, compare more checkpoints and datasets, calibrate the change-point test with stronger null controls, and compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}.
 
 \section{Conclusion}
-The completed sweep supports a simple conclusion: visual representation spaces are often locally stratified rather than uniformly smooth. Raw pixels are already highly irregular, TinyViT tokens are more irregular than matched raw pixels on average, and DINOv2 patch embeddings are smoother than DINOv2 final-layer tokens. Local geometric diagnostics therefore expose structure that a single global manifold summary would miss.
+Vision is a dense, spatially grounded medium for the stratified-manifold question raised by language-token embeddings. Across \dataset{COCO}, \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}, frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token spaces are not well summarized by one global intrinsic dimension. The useful story is local: dimension estimates, fiber-violation maps, sparse-complexity heatmaps, patch--token distance diagnostics, and SAM mask previews together reveal stratified structure that a single number would hide.
 
 \begin{ack}
-\TODO{Add funding, compute, and collaboration acknowledgments here.}
+Acknowledgments are omitted for anonymous review.
 \end{ack}
 
 \bibliographystyle{plainnat}
@@ -235,22 +667,141 @@ The completed sweep supports a simple conclusion: visual representation spaces a
 
 \appendix
 
+\input{patch_token_distance_appendix.tex}
+
+\input{residual_sweep_appendix.tex}
+
+\section{Additional Vision Encoder Geometry Visualizations}
+\label{app:additional-vision-encoder-visualizations}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_fiber_dimension_heatmap}
+\caption{SigLIP2-B local dimension heatmap. Color marks the first-regime log-volume/log-radius slope for each patch token.}
+\label{fig:app-siglip-dimension-heatmap}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_fiber_dimension_heatmap}
+\caption{AIMv2-L local dimension heatmap. AIMv2 uses a $16\times16$ analysis grid, yielding 4096 tokens across the same 16-image subset.}
+\label{fig:app-aimv2-dimension-heatmap}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_dimension_patch_gallery}
+\caption{SigLIP2-B patch crops selected by low, middle, high local dimension and high corrected slope-increase score.}
+\label{fig:app-siglip-dimension-gallery}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_dimension_patch_gallery}
+\caption{AIMv2-L patch crops selected by low, middle, high local dimension and high corrected slope-increase score.}
+\label{fig:app-aimv2-dimension-gallery}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_fiber_volume_curve_gallery}
+\caption{Representative SigLIP2-B fiber-bundle volume curves projected back to source image patches.}
+\label{fig:app-siglip-volume-curves}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_fiber_volume_curve_gallery}
+\caption{Representative AIMv2-L fiber-bundle volume curves projected back to source image patches.}
+\label{fig:app-aimv2-volume-curves}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_siglip2_base_sparse_dictionary_probe}
+\caption{SigLIP2-B sparse-probe dashboard at $\tau=0.30$.}
+\label{fig:app-siglip-sparse-dashboard}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth]{\figroot/coco_aimv2_large_sparse_dictionary_probe}
+\caption{AIMv2-L sparse-probe dashboard at $\tau=0.30$.}
+\label{fig:app-aimv2-sparse-dashboard}
+\end{figure}
+
+\clearpage
+
+\section{Cross-Dataset Stress-Test Visualizations}
+\label{app:cross-dataset-visualizations}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_stl10_dinov3_huge_fiber_irregularity_heatmap}
+\caption{\dataset{STL10} DINOv3-H+ corrected fiber-violation heatmap. DINOv3 remains almost perfectly image-local on this object-centered dataset, while the projected violations still appear in spatially localized patches.}
+\label{fig:app-cross-stl10-dino-irregularity}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_stl10_sam_fiber_irregularity_heatmap}
+\caption{\dataset{STL10} SAM-H corrected fiber-violation heatmap. SAM has a higher \dataset{STL10} fiber-violation ratio than DINOv3-H+, but these non-detection images do not provide box-prompt mask context, so the plot should be read as encoder geometry rather than segmentation behavior.}
+\label{fig:app-cross-stl10-sam-irregularity}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_dtd_dinov3_huge_sparse_dictionary_heatmaps}
+\caption{\dataset{DTD} DINOv3-H+ sparse-complexity heatmap. Texture neighborhoods are relatively easy for the local raw-patch dictionary under this protocol, with mean $S_i=6.29$.}
+\label{fig:app-cross-dtd-dino-sparse}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_dtd_sam_sparse_dictionary_heatmaps}
+\caption{\dataset{DTD} SAM-H sparse-complexity heatmap. Compared with DINOv3-H+, SAM-H has much larger raw-patch reconstruction burden on texture images, with mean $S_i=22.92$ under the same local dictionary probe.}
+\label{fig:app-cross-dtd-sam-sparse}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_eurosat_sam_fiber_irregularity_heatmap}
+\caption{\dataset{EuroSAT} SAM-H corrected fiber-violation heatmap. This is the strongest cross-dataset stress case in the current runs: SAM-H has low median local dimension but high generic change rate and high corrected slope-increase violation ratio.}
+\label{fig:app-cross-eurosat-sam-irregularity}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_eurosat_dinov3_huge_sparse_dictionary_heatmaps}
+\caption{\dataset{EuroSAT} DINOv3-H+ sparse-complexity heatmap. DINOv3-H+ stays strongly image-local on satellite scenes and has a moderate-to-high sparse reconstruction burden, distinct from the lower SigLIP2/AIMv2 sparse scores on the same dataset.}
+\label{fig:app-cross-eurosat-dino-sparse}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/cross_eurosat_sam_sparse_dictionary_heatmaps}
+\caption{\dataset{EuroSAT} SAM-H sparse-complexity heatmap. SAM-H has the largest cross-dataset sparse burden in \Cref{tab:cross-dataset-stress}, suggesting that satellite patches are hard for its local raw-patch dictionaries even when the estimated median feature-space dimension is low.}
+\label{fig:app-cross-eurosat-sam-sparse}
+\end{figure}
+
+\clearpage
+
 \section{Artifact and Reproducibility Statement}
 \begin{itemize}[leftmargin=1.5em]
-\item Snapshot used for the completed sweep: \url{/scratch/xl598/submission_snapshots/volume_probe_sweeps_20260413_154940/repo}
-\item Run root: \url{/scratch/xl598/runs/llm-stratified/20260413_154940_volume_probe_visual_sweep}
-\item Sweep launcher: \texttt{scripts/launch\_volume\_probe\_sweeps\_slurm.sh}
-\item Report aggregator: \texttt{scripts/analyze\_pixel\_sweep.py}
-\item Environment: \texttt{tinyvit}
-\item Job ids: \texttt{51035214} and \texttt{51035215}
-\end{itemize}
-
-\section{Extra Notes for Finalizing This Draft}
-\begin{itemize}[leftmargin=1.5em]
-\item Replace placeholder author metadata.
-\item Tighten the introduction and discussion further if targeting the NeurIPS nine-page main-paper limit.
-\item Replace one or both placeholder results tables with denser compact tables if page pressure becomes severe.
-\item Optionally move one figure to the appendix and keep only the strongest result panels in the main paper.
+\item The main \dataset{COCO} DINOv3-H+ figures are vendored from \url{runs/local/coco_dinov3_huge_sparse_fiber/20260509_190534}; the W\&B run ID is \texttt{ingbtg9a}.
+\item The main \dataset{COCO} SAM ViT-Huge figures are vendored from \url{runs/local/coco_sam_fiber/20260509_191042}; the W\&B run ID is \texttt{nsbl2nhz}.
+\item The SigLIP2-B figures are vendored from \url{runs/local/coco_siglip2_base_sparse_fiber/20260509_203403}; the W\&B run ID is \texttt{rqsw6hyt}.
+\item The AIMv2-L figures are vendored from \url{runs/local/coco_aimv2_large_sparse_fiber/20260509_203836}; the W\&B run ID is \texttt{xqnbkzlm}.
+\item The patch--token distance diagnostics for DINOv3-H+/SAM-H are generated from a shared DINOv3-H+ image tensor. SigLIP2-B and AIMv2-L distance diagnostics use their corresponding image-aligned 16-image embeddings; raw outputs are saved under \url{runs/local/patch_token_distance/20260509_v3} and \url{runs/local/patch_token_distance/20260509_vision_expansion}. The compact digest and clean DINO/SAM comparison grids are generated by \url{scripts/patch_token_distance_digest.py} and \url{scripts/patch_token_distance_comparison_grid.py}.
+\item The high-capacity residual-threshold sparse-coding sweep comes from \url{runs/local/sparse_residual_sweep/20260509_hicap}; it reuses the saved DINOv3-H+ and SAM-H embeddings from the two runs above, uses fixed $k=128$ neighborhoods with 128 local PCA atoms and OMP cap 64, and varies only the OMP residual target.
+\item The SigLIP2-B/AIMv2-L high-capacity residual-threshold sparse-coding sweep comes from \url{runs/local/sparse_residual_sweep/20260509_vision_expansion}.
+\item The SAM ViT-Huge patch-size sensitivity table comes from \url{runs/local/coco_sam_patch_size_sweep/20260508}.
+\item The auxiliary \dataset{COCO} VAR-d30 geometry and generation-branching figures are vendored from \url{runs/local/coco_var_d30_sparse_fiber/20260509_194508}; the W\&B run ID is \texttt{3zmdg9wf}. The earlier generation-diagnostic run \texttt{skt3dcv6} remains referenced for continuity.
+\item The DINOv3 ViT-L/16 comparison row comes from \url{runs/local/coco_pretrained_vit_sparse_fiber/20260509_193911}; the W\&B run ID is \texttt{dzwnvdkk}.
+\item The cross-dataset summary table is saved at \url{runs/local/cross_dataset_logs/cross_dataset_summary_20260511.csv}. The \dataset{STL10} runs are DINOv3-H+ \url{runs/local/stl10_dinov3_huge_sparse_fiber/20260511_102511} (W\&B \texttt{cw9js1pg}), SAM-H \url{runs/local/stl10_sam_huge_sparse_fiber/20260511_102912} (W\&B \texttt{3br3f0da}), SigLIP2-B \url{runs/local/stl10_siglip2_base_sparse_fiber/20260511_101846} (W\&B \texttt{9fld8bxk}), and AIMv2-L \url{runs/local/stl10_aimv2_large_sparse_fiber/20260511_103310} (W\&B \texttt{xf12rlif}).
+\item The \dataset{DTD} cross-dataset runs are DINOv3-H+ \url{runs/local/dtd_dinov3_huge_sparse_fiber/20260511_103803} (W\&B \texttt{2z0r30qt}), SAM-H \url{runs/local/dtd_sam_huge_sparse_fiber/20260511_104159} (W\&B \texttt{afs0rz4h}), SigLIP2-B \url{runs/local/dtd_siglip2_base_sparse_fiber/20260511_104554} (W\&B \texttt{1dxplxyq}), and AIMv2-L \url{runs/local/dtd_aimv2_large_sparse_fiber/20260511_104951} (W\&B \texttt{6q5z8po8}).
+\item The \dataset{EuroSAT} cross-dataset runs are DINOv3-H+ \url{runs/local/eurosat_dinov3_huge_sparse_fiber/20260511_105415} (W\&B \texttt{5opco63m}), SAM-H \url{runs/local/eurosat_sam_huge_sparse_fiber/20260511_105808} (W\&B \texttt{ov96uga3}), SigLIP2-B \url{runs/local/eurosat_siglip2_base_sparse_fiber/20260511_110200} (W\&B \texttt{mfung05h}), and AIMv2-L \url{runs/local/eurosat_aimv2_large_sparse_fiber/20260511_110549} (W\&B \texttt{bkmujblm}).
+\item The final public release should add the exact environment file, model-loading commands, run logs, and the full aggregated JSON/markdown reports for all \dataset{COCO} and cross-dataset runs.
 \end{itemize}
 
 \input{checklist.tex}

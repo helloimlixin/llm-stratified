@@ -1,0 +1,9 @@
+# Alias for COCO 2017 multilabel dataset configuration.
+name: COCO2017
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}
+img_size: 224
+batch_size: 16
+batch_size_test: 16
+num_workers: 0
+subset_train: null
+subset_test: null

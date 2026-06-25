@@ -62,6 +62,13 @@ class TestTrainLoops(unittest.TestCase):
         acc = multilabel_accuracy(logits, targets)
         self.assertAlmostEqual(acc, 1.0)
 
+    def test_multilabel_metric_penalizes_all_negative_predictions(self):
+        logits = torch.full((4, 5), -10.0)
+        targets = torch.zeros((4, 5))
+        targets[:, 0] = 1.0
+        score = multilabel_accuracy(logits, targets)
+        self.assertAlmostEqual(score, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

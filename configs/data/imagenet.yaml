@@ -1,0 +1,9 @@
+# ImageNet dataset configuration.
+name: IMAGENET
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}/imagenet
+img_size: 224
+batch_size: 64
+batch_size_test: 128
+num_workers: 8
+subset_train: null
+subset_test: null

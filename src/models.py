@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import os
+import sys
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
@@ -15,12 +20,18 @@ except ImportError:
     timm = None
 
 try:
-    from transformers import AutoImageProcessor, AutoModel, SamModel, SamProcessor
+    from transformers import Aimv2VisionModel, AutoImageProcessor, AutoModel, SamModel, SamProcessor
 except ImportError:
+    Aimv2VisionModel = None
     AutoImageProcessor = None
     AutoModel = None
     SamModel = None
     SamProcessor = None
+
+try:
+    from huggingface_hub import hf_hub_download
+except ImportError:
+    hf_hub_download = None
 
 from utils import denormalize_images
 
@@ -28,11 +39,13 @@ __all__ = [
     "DinoV2FeatureExtractor",
     "DinoV2Wrapper",
     "FeedForwardBlock",
+    "HfVisionFeatureExtractor",
     "PatchEmbeddingLayer",
     "PatchEmbed",
     "SamBackboneWrapper",
     "SamImageEncoder",
     "TinyViT",
+    "VarAutoregressiveImageEncoder",
     "resolve_patch_size",
     "TimmVisionTransformer",
     "TimmViTWrapper",
@@ -151,6 +164,8 @@ class TinyViT(nn.Module):
 def resolve_patch_size(model) -> int | None:
     """Best-effort patch size extraction for TinyViT/timm ViT."""
     pe = getattr(model, "patch_embed", None)
+    if pe is None and hasattr(model, "backbone"):
+        pe = getattr(model.backbone, "patch_embed", None)
     if pe is None:
         return None
     ps = getattr(pe, "patch_size", None)
@@ -175,19 +190,27 @@ class TimmVisionTransformer(nn.Module):
             raise ImportError("timm is required for --timm-model; pip install timm")
         self.backbone = timm.create_model(model_name, pretrained=pretrained, num_classes=num_classes)
         self.has_dist_token = getattr(self.backbone, "dist_token", None) is not None
-        self.num_prefix_tokens = 2 if self.has_dist_token else 1
+        self.num_prefix_tokens = int(
+            getattr(self.backbone, "num_prefix_tokens", 2 if self.has_dist_token else 1) or 0
+        )
         self.embed_dim = getattr(self.backbone, "embed_dim", None) or getattr(self.backbone, "num_features", None)
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
-        x = self.backbone.patch_embed(x)
-        cls_tokens = self.backbone.cls_token.expand(batch_size, -1, -1)
-        if self.has_dist_token:
-            x = torch.cat((cls_tokens, self.backbone.dist_token.expand(batch_size, -1, -1), x), dim=1)
-        else:
-            x = torch.cat((cls_tokens, x), dim=1)
-        x = self.backbone.pos_drop(x + self.backbone.pos_embed)
-        return self.backbone.norm(self.backbone.blocks(x))
+        feats = self.backbone.forward_features(x)
+        if isinstance(feats, dict):
+            for key in ("x", "last_hidden_state", "tokens"):
+                value = feats.get(key)
+                if isinstance(value, torch.Tensor) and value.dim() == 3:
+                    return value
+            for value in feats.values():
+                if isinstance(value, torch.Tensor) and value.dim() == 3:
+                    return value
+            raise RuntimeError(f"timm model returned feature dict without token tensor: {list(feats.keys())}")
+        if not isinstance(feats, torch.Tensor) or feats.dim() != 3:
+            raise RuntimeError(
+                f"timm model returned unsupported feature shape {getattr(feats, 'shape', None)}; expected B x N x C"
+            )
+        return feats
 
     def tokens_to_logits(self, tokens: torch.Tensor) -> torch.Tensor:
         if hasattr(self.backbone, "forward_head"):
@@ -289,6 +312,115 @@ class DinoV2FeatureExtractor(nn.Module):
         return pack
 
 
+class HfVisionFeatureExtractor(nn.Module):
+    """Frozen generic Hugging Face vision encoder with patch-token access.
+
+    This wrapper is for vision-first foundation models such as SigLIP2 and
+    AIMv2 whose image encoders expose a last hidden state but do not need a
+    model-specific probing path. It returns patch tokens only; the classifier
+    wrapper adds a mean-token prefix for compatibility with the training/fiber
+    pipeline.
+    """
+
+    def __init__(self, model_name: str, *, trust_remote_code: bool = True):
+        super().__init__()
+        if AutoImageProcessor is None or AutoModel is None:
+            raise ImportError("transformers is required for HF vision probing; pip install transformers")
+
+        self.model_name = str(model_name)
+        self.processor = AutoImageProcessor.from_pretrained(
+            self.model_name,
+            trust_remote_code=trust_remote_code,
+        )
+        if "aimv2" in self.model_name.lower() and Aimv2VisionModel is not None:
+            self.backbone = Aimv2VisionModel.from_pretrained(self.model_name)
+        else:
+            self.backbone = AutoModel.from_pretrained(
+                self.model_name,
+                trust_remote_code=trust_remote_code,
+            )
+        self.backbone.eval()
+        for param in self.backbone.parameters():
+            param.requires_grad_(False)
+
+        config = getattr(self.backbone, "config", None)
+        vision_cfg = getattr(config, "vision_config", None) or config
+        self.embed_dim = int(
+            getattr(vision_cfg, "hidden_size", 0)
+            or getattr(config, "hidden_size", 0)
+            or getattr(vision_cfg, "projection_dim", 0)
+        )
+        self.patch_size = int(getattr(vision_cfg, "patch_size", getattr(config, "patch_size", 16)))
+        self.expected_image_size = _resolve_processor_size(self.processor, vision_cfg or config)
+        self.image_mean = tuple(float(x) for x in getattr(self.processor, "image_mean", (0.5, 0.5, 0.5)))
+        self.image_std = tuple(float(x) for x in getattr(self.processor, "image_std", (0.5, 0.5, 0.5)))
+        self.num_prefix_tokens = 0
+
+    def prepare_images_for_features(
+        self,
+        imgs: torch.Tensor,
+        dataset_name: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        imgs01 = denormalize_images(imgs, dataset_name)
+        if imgs01.shape[-2:] != (self.expected_image_size, self.expected_image_size):
+            imgs01 = F.interpolate(
+                imgs01,
+                size=(self.expected_image_size, self.expected_image_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+        mean = torch.tensor(self.image_mean, device=imgs01.device, dtype=imgs01.dtype).view(1, -1, 1, 1)
+        std = torch.tensor(self.image_std, device=imgs01.device, dtype=imgs01.dtype).view(1, -1, 1, 1)
+        pixel_values = (imgs01 - mean) / std
+        return pixel_values, imgs01
+
+    def _vision_outputs(self, pixel_values: torch.Tensor):
+        kwargs = {"pixel_values": pixel_values, "output_hidden_states": True, "return_dict": True}
+        try:
+            return self.backbone(**kwargs)
+        except (TypeError, ValueError):
+            vision_model = getattr(self.backbone, "vision_model", None)
+            if vision_model is None:
+                raise
+            return vision_model(**kwargs)
+
+    def _last_hidden_state(self, outputs) -> torch.Tensor:
+        hidden = getattr(outputs, "last_hidden_state", None)
+        if isinstance(hidden, torch.Tensor):
+            return hidden
+        vision_outputs = getattr(outputs, "vision_model_output", None)
+        hidden = getattr(vision_outputs, "last_hidden_state", None)
+        if isinstance(hidden, torch.Tensor):
+            return hidden
+        hidden_states = getattr(outputs, "hidden_states", None)
+        if hidden_states:
+            return hidden_states[-1]
+        if isinstance(outputs, dict):
+            for key in ("last_hidden_state", "tokens"):
+                value = outputs.get(key)
+                if isinstance(value, torch.Tensor):
+                    return value
+            vision_outputs = outputs.get("vision_model_output")
+            if isinstance(vision_outputs, dict):
+                value = vision_outputs.get("last_hidden_state")
+                if isinstance(value, torch.Tensor):
+                    return value
+        raise RuntimeError(f"HF vision model {self.model_name} did not expose patch-token hidden states")
+
+    def forward_feature_pack(self, pixel_values: torch.Tensor) -> dict[str, torch.Tensor]:
+        outputs = self._vision_outputs(pixel_values)
+        hidden = self._last_hidden_state(outputs)
+        if hidden.dim() != 3:
+            raise RuntimeError(f"HF vision model returned unsupported hidden shape {tuple(hidden.shape)}")
+        expected_grid = max(1, int(round(self.expected_image_size / max(1, self.patch_size))))
+        expected_tokens = expected_grid * expected_grid
+        if hidden.shape[1] >= expected_tokens:
+            tokens = hidden[:, -expected_tokens:, :]
+        else:
+            tokens = hidden
+        return {"tokens": tokens}
+
+
 class SamImageEncoder(nn.Module):
     """Frozen SAM image encoder wrapper with optional box-prompted mask prediction."""
 
@@ -318,7 +450,7 @@ class SamImageEncoder(nn.Module):
 
     def _image_numpy(self, img: torch.Tensor, dataset_name: str) -> tuple[np.ndarray, torch.Tensor]:
         img01 = denormalize_images(img.unsqueeze(0), dataset_name).squeeze(0).detach().cpu()
-        np_img = img01.permute(1, 2, 0).numpy()
+        np_img = (img01.clamp(0, 1) * 255.0).round().to(torch.uint8).permute(1, 2, 0).numpy()
         return np_img, img01
 
     def prepare_single_image(self, img: torch.Tensor, dataset_name: str, *, device: torch.device) -> tuple[dict, torch.Tensor]:
@@ -401,6 +533,213 @@ class SamImageEncoder(nn.Module):
         return [mask_tensor[i].squeeze() for i in range(mask_tensor.shape[0])]
 
 
+def _resolve_var_repo_path(var_repo_path: str | None = None) -> Path:
+    candidates: list[Path] = []
+    if var_repo_path:
+        candidates.append(Path(var_repo_path))
+    env_path = os.environ.get("VAR_REPO_PATH")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(
+        [
+            Path.cwd() / "external" / "VAR",
+            Path(__file__).resolve().parents[1] / "external" / "VAR",
+            Path(__file__).resolve().parents[2] / "external" / "VAR",
+        ]
+    )
+    for candidate in candidates:
+        if (candidate / "models" / "__init__.py").exists():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        "Could not find the FoundationVision/VAR checkout. Clone it to external/VAR "
+        "or set VAR_REPO_PATH to the checkout directory."
+    )
+
+
+def _import_var_build_vae_var(var_repo_path: str | None = None):
+    """Import FoundationVision/VAR despite this repo's top-level models.py name."""
+    repo_path = _resolve_var_repo_path(var_repo_path)
+    repo_str = str(repo_path)
+    saved_models = sys.modules.get("models")
+    saved_path = list(sys.path)
+    try:
+        sys.path.insert(0, repo_str)
+        if saved_models is not None:
+            del sys.modules["models"]
+        var_models = importlib.import_module("models")
+        return var_models.build_vae_var
+    finally:
+        if saved_models is not None:
+            sys.modules["models"] = saved_models
+        else:
+            sys.modules.pop("models", None)
+        sys.path[:] = saved_path
+
+
+def _parse_var_depth(model_name: str) -> int:
+    stem = Path(str(model_name)).stem.lower()
+    for part in stem.replace("-", "_").split("_"):
+        if part.startswith("d") and part[1:].isdigit():
+            return int(part[1:])
+    raise ValueError(f"Could not parse VAR depth from model_name={model_name!r}; expected e.g. 'var_d30'.")
+
+
+def _load_torch_state_dict(path: str, *, map_location):
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
+class VarAutoregressiveImageEncoder(nn.Module):
+    """Frozen VAR image generator wrapper exposing teacher-forced final-scale tokens.
+
+    VAR is class-conditional on ImageNet, while our COCO probe is analysis-only.
+    We therefore use the unconditional class embedding and teacher-force the visual
+    code sequence obtained from VAR's VQ tokenizer. The exposed tokens are the
+    final 16x16 next-scale hidden states before the vocabulary head.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "var_d30",
+        *,
+        repo_id: str = "FoundationVision/var",
+        var_repo_path: str | None = None,
+        vae_filename: str = "vae_ch160v4096z32.pth",
+        patch_nums: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16),
+        num_classes: int = 1000,
+        class_label: int = -1,
+    ):
+        super().__init__()
+        if hf_hub_download is None:
+            raise ImportError("huggingface_hub is required for VAR probing; pip install huggingface_hub")
+
+        self.model_name = str(model_name)
+        self.repo_id = str(repo_id)
+        self.patch_nums = tuple(int(p) for p in patch_nums)
+        self.expected_image_size = 16 * int(self.patch_nums[-1])
+        self.patch_size = self.expected_image_size // int(self.patch_nums[-1])
+        self.num_prefix_tokens = 0
+        self.class_label = int(class_label)
+
+        depth = _parse_var_depth(self.model_name)
+        self.depth = depth
+        self.embed_dim = depth * 64
+
+        build_vae_var = _import_var_build_vae_var(var_repo_path)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.vae, self.var = build_vae_var(
+            device=device,
+            patch_nums=self.patch_nums,
+            depth=depth,
+            num_classes=num_classes,
+            shared_aln=False,
+        )
+
+        vae_path = hf_hub_download(repo_id=self.repo_id, filename=vae_filename)
+        var_filename = self.model_name if self.model_name.endswith(".pth") else f"{self.model_name}.pth"
+        var_path = hf_hub_download(repo_id=self.repo_id, filename=var_filename)
+        self.vae.load_state_dict(_load_torch_state_dict(vae_path, map_location=device), strict=True)
+        self.var.load_state_dict(_load_torch_state_dict(var_path, map_location=device), strict=True)
+
+        self.var.cond_drop_rate = 0.0
+        self.vae.eval()
+        self.var.eval()
+        for param in self.parameters():
+            param.requires_grad_(False)
+
+    def prepare_images_for_features(
+        self,
+        imgs: torch.Tensor,
+        dataset_name: str,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        imgs01 = denormalize_images(imgs, dataset_name)
+        if imgs01.shape[-2:] != (self.expected_image_size, self.expected_image_size):
+            imgs01 = F.interpolate(
+                imgs01,
+                size=(self.expected_image_size, self.expected_image_size),
+                mode="bilinear",
+                align_corners=False,
+            )
+        return imgs01.mul(2.0).sub(1.0).clamp(-1.0, 1.0), imgs01
+
+    def _hidden_states(
+        self,
+        label_B: torch.LongTensor,
+        x_BLCv_wo_first_l: torch.Tensor,
+    ) -> torch.Tensor:
+        var = self.var
+        _bg, ed = var.begin_ends[var.prog_si] if var.prog_si >= 0 else (0, var.L)
+        B = x_BLCv_wo_first_l.shape[0]
+        autocast_off = (
+            torch.amp.autocast(device_type="cuda", enabled=False)
+            if hasattr(torch, "amp") and label_B.is_cuda
+            else nullcontext()
+        )
+        with autocast_off:
+            sos = cond_BD = var.class_emb(label_B)
+            sos = sos.unsqueeze(1).expand(B, var.first_l, -1) + var.pos_start.expand(B, var.first_l, -1)
+            if var.prog_si == 0:
+                x_BLC = sos
+            else:
+                x_BLC = torch.cat((sos, var.word_embed(x_BLCv_wo_first_l.float())), dim=1)
+            x_BLC = x_BLC + var.lvl_embed(var.lvl_1L[:, :ed].expand(B, -1)) + var.pos_1LC[:, :ed]
+
+        attn_bias = var.attn_bias_for_masking[:, :, :ed, :ed]
+        cond_BD_or_gss = var.shared_ada_lin(cond_BD)
+        temp = x_BLC.new_ones(8, 8)
+        main_type = torch.matmul(temp, temp).dtype
+        x_BLC = x_BLC.to(dtype=main_type)
+        cond_BD_or_gss = cond_BD_or_gss.to(dtype=main_type)
+        attn_bias = attn_bias.to(dtype=main_type)
+
+        for block in var.blocks:
+            x_BLC = block(x=x_BLC, cond_BD=cond_BD_or_gss, attn_bias=attn_bias)
+        return x_BLC.float()
+
+    def forward_feature_pack(self, pixel_values: torch.Tensor) -> dict[str, torch.Tensor]:
+        idx_Bl = self.vae.img_to_idxBl(pixel_values, v_patch_nums=self.patch_nums)
+        x_BLCv_wo_first_l = self.vae.quantize.idxBl_to_var_input(idx_Bl)
+        label_value = self.var.num_classes if self.class_label < 0 else self.class_label
+        labels = torch.full(
+            (pixel_values.shape[0],),
+            int(label_value),
+            dtype=torch.long,
+            device=pixel_values.device,
+        )
+        hidden = self._hidden_states(labels, x_BLCv_wo_first_l)
+        final_start, final_end = self.var.begin_ends[-1]
+        return {"tokens": hidden[:, final_start:final_end, :]}
+
+    @torch.no_grad()
+    def forward_generation_pack(self, pixel_values: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return final-scale teacher-forced tokens plus VAR vocabulary logits.
+
+        The fiber pipeline uses the hidden states as frozen patch-token features.
+        Generation-side diagnostics also need the actual next-token distribution,
+        so this method exposes the matching final-scale logits and VQ targets.
+        """
+        idx_Bl = self.vae.img_to_idxBl(pixel_values, v_patch_nums=self.patch_nums)
+        x_BLCv_wo_first_l = self.vae.quantize.idxBl_to_var_input(idx_Bl)
+        label_value = self.var.num_classes if self.class_label < 0 else self.class_label
+        labels = torch.full(
+            (pixel_values.shape[0],),
+            int(label_value),
+            dtype=torch.long,
+            device=pixel_values.device,
+        )
+        hidden = self._hidden_states(labels, x_BLCv_wo_first_l)
+        logits = self.var(labels, x_BLCv_wo_first_l)
+        targets = torch.cat(idx_Bl, dim=1)
+        final_start, final_end = self.var.begin_ends[-1]
+        return {
+            "tokens": hidden[:, final_start:final_end, :],
+            "logits": logits[:, final_start:final_end, :],
+            "targets": targets[:, final_start:final_end],
+        }
+
+
 class _PatchEmbedShim(nn.Module):
     def __init__(self, patch_size: int):
         super().__init__()
@@ -420,10 +759,16 @@ class FrozenBackboneClassifier(nn.Module):
         self.backbone_kind = backbone_kind.lower()
         if self.backbone_kind == "dinov2":
             self.backbone = DinoV2FeatureExtractor(**backbone_kwargs)
+        elif self.backbone_kind in {"hf_vision", "siglip", "siglip2", "aimv2"}:
+            self.backbone = HfVisionFeatureExtractor(**backbone_kwargs)
         elif self.backbone_kind == "sam":
             self.backbone = SamImageEncoder(**backbone_kwargs)
+        elif self.backbone_kind == "var":
+            self.backbone = VarAutoregressiveImageEncoder(**backbone_kwargs)
         else:
-            raise ValueError(f"Unknown backbone_kind '{backbone_kind}'; expected 'dinov2' or 'sam'")
+            raise ValueError(
+                f"Unknown backbone_kind '{backbone_kind}'; expected 'dinov2', 'hf_vision', 'sam', or 'var'"
+            )
 
         self.num_classes = int(num_classes)
         self.embed_dim = int(self.backbone.embed_dim)

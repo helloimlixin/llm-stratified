@@ -1,0 +1,10 @@
+# COCO 2017 multilabel dataset configuration.
+# Expected layout: ${root}/coco/{train2017,val2017,annotations}.
+name: COCO
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}
+img_size: 224
+batch_size: 16
+batch_size_test: 16
+num_workers: 0
+subset_train: null
+subset_test: null

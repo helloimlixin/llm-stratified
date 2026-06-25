@@ -41,6 +41,7 @@ vit_token_polysemy_ablate_reps: 5
 # Sparse dictionary probe: epsilon-ball patch counts + OMP sparsity at fixed residual.
 sparse_probe: false
 sparse_probe_radius: null  # Auto from kNN radius when null
+sparse_probe_neighbor_k: null  # Fixed neighborhood volume when set; overrides radius.
 sparse_probe_auto_neighbor_k: 32
 sparse_probe_auto_radius_quantile: 0.5
 sparse_probe_min_patches: 12
@@ -48,3 +49,10 @@ sparse_probe_max_anchors: null  # Probe every collected token; set an integer on
 sparse_probe_dictionary_size: 32
 sparse_probe_residual_threshold: 0.15
 sparse_probe_max_sparsity: 16
+sparse_probe_algorithm: omp
+sparse_probe_iht_steps: 80
+sparse_probe_iht_lr: null
+sparse_probe_heatmap_images: 16
+sparse_probe_log_summary_plot: false  # Keep per-epoch summary PNGs on disk; log final run summary once.
+sparse_probe_volume_curve: false
+sparse_probe_volume_curve_volumes: null

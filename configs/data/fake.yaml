@@ -1,0 +1,9 @@
+# Alias for the download-free smoke-test dataset.
+name: FAKEDATA
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}
+img_size: 32
+batch_size: 32
+batch_size_test: 64
+num_workers: 0
+subset_train: null
+subset_test: null

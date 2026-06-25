@@ -1,0 +1,9 @@
+# Describable Textures Dataset configuration
+name: DTD
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}
+img_size: 224
+batch_size: 32
+batch_size_test: 64
+num_workers: 4
+subset_train: null
+subset_test: null

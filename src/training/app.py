@@ -174,4 +174,7 @@ def run_training_job_from_config(cfg: Any, paths: RunPaths, fiber_config: FiberC
         world_size=world_size,
         use_accelerate=cfg.compute.use_accelerate,
     )
-    print(f"\nTraining complete! Results saved to: {paths.output_dir}")
+    if int(cfg.training.epochs) <= 0:
+        print(f"\nAnalysis-only run complete! Results saved to: {paths.output_dir}")
+    else:
+        print(f"\nTraining complete! Results saved to: {paths.output_dir}")

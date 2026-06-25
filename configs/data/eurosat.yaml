@@ -1,0 +1,9 @@
+# EuroSAT dataset configuration
+name: EUROSAT
+root: ${oc.env:LLM_STRATIFIED_DATA_ROOT,../data}
+img_size: 64
+batch_size: 64
+batch_size_test: 128
+num_workers: 4
+subset_train: null
+subset_test: null

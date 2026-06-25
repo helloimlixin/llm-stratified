@@ -10,6 +10,8 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
 
+from fiber.figure_io import save_figure
+from fiber.geometry import min_change_pvalue, min_fiber_violation_pvalue
 from utils import denormalize_images
 
 try:
@@ -20,10 +22,12 @@ except Exception:  # pragma: no cover
 try:
     import matplotlib
     matplotlib.use("Agg")
+    from matplotlib.patches import Rectangle
     import matplotlib.pyplot as plt
     HAS_MATPLOTLIB = True
 except ImportError:
     matplotlib = None
+    Rectangle = None
     plt = None
     HAS_MATPLOTLIB = False
 
@@ -137,6 +141,12 @@ def extract_patch_image(
     img_tensor: torch.Tensor, bbox: torch.Tensor, upscale: int = 128
 ) -> Image.Image:
     np_img = img_tensor.permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+    if np_img.ndim == 2:
+        np_img = np.repeat(np_img[:, :, None], 3, axis=2)
+    elif np_img.shape[2] == 1:
+        np_img = np.repeat(np_img, 3, axis=2)
+    elif np_img.shape[2] > 3:
+        np_img = np_img[:, :, :3]
     h, w = np_img.shape[:2]
     x0, y0, x1, y1 = [int(v) for v in bbox.tolist()]
     x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
@@ -160,6 +170,12 @@ def add_heatmap_patch(
     neighborhood_size: float | None = None,
 ) -> Image.Image:
     np_img = img_tensor.permute(1, 2, 0).clamp(0, 1).numpy()
+    if np_img.ndim == 2:
+        np_img = np.repeat(np_img[:, :, None], 3, axis=2)
+    elif np_img.shape[2] == 1:
+        np_img = np.repeat(np_img, 3, axis=2)
+    elif np_img.shape[2] > 3:
+        np_img = np_img[:, :, :3]
     h, w = np_img.shape[:2]
     x0, y0, x1, y1 = [int(v) for v in bbox.tolist()]
     x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
@@ -335,8 +351,10 @@ def save_training_summary_plot(
     ax2b.set_ylabel("score / ratio")
     ax2b.legend(loc="lower right")
     ax3, sc = _add_embedding_scatter_subplot(fig, 133, final_coords_3d, final_colors, title="Embeddings (PCA)")
-    fig.colorbar(sc, ax=ax3, shrink=0.6, label="dim")
-    fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
+    cbar = fig.colorbar(sc, ax=ax3, shrink=0.6)
+    cbar.set_label("dim", fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
+    fig.tight_layout(); save_figure(fig, out_path, dpi=200); plt_mod.close(fig)
 
 
 def build_embedding_scatter_figure(
@@ -345,12 +363,14 @@ def build_embedding_scatter_figure(
     plt_mod = _require_matplotlib()
     fig = plt_mod.figure(figsize=(6, 5))
     ax, sc = _add_embedding_scatter_subplot(fig, 111, coords3d, dims, title=title)
-    fig.colorbar(sc, ax=ax, shrink=0.6, label="estimated local dimension")
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.6)
+    cbar.set_label("estimated local dimension", fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
     fig.text(
         0.02,
         0.02,
         "Color shows the first estimated local volume dimension for each token.",
-        fontsize=8,
+        fontsize=12,
         color="#333333",
     )
     fig.tight_layout(rect=[0, 0.04, 1, 1])
@@ -412,14 +432,14 @@ def save_polysemy_irregularity_plot(
     ax0.set_xlabel("Polysemy entropy (kNN labels)")
     ax0.set_ylabel("Irregularity (-log10 p)")
     ax0.set_title(f"Do semantic mixtures align with geometric failures? (r={pearson_r:.2f}, rho={spearman_r:.2f})")
-    ax0.legend(fontsize=8, frameon=False)
+    ax0.legend(fontsize=12, frameon=False)
     box_data = [ent_ok, ent_rej] if ent_rej.size else [ent_ok]
     ax1.boxplot(box_data, labels=["non-reject", "reject"] if ent_rej.size else ["non-reject"], showfliers=False)
     ax1.set_ylabel("Polysemy entropy")
     ax1.set_title("Entropy split by fiber-test outcome")
     out_path = out_dir / f"{prefix}_polysemy_entropy_vs_irregularity.png"
-    fig.suptitle("Polysemy vs Fiber Irregularity", fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.93]); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
+    fig.suptitle("Polysemy vs Fiber Irregularity", fontsize=18)
+    fig.tight_layout(rect=[0, 0, 1, 0.93]); save_figure(fig, out_path, dpi=200); plt_mod.close(fig)
     return out_path, stats
 
 
@@ -449,12 +469,14 @@ def save_polysemy_entropy_scatter_plot(
     ax.set_xlabel("Top-label share"); ax.set_ylabel("Label entropy")
     ax.set_title("Polysemy Anchors: Higher Entropy Means More Label Mixing")
     ax.set_xlim(0.0, 1.0)
-    fig.colorbar(sc, ax=ax, shrink=0.8, label="unique labels in neighborhood")
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.8)
+    cbar.set_label("unique labels in neighborhood", fontsize=13)
+    cbar.ax.tick_params(labelsize=11)
     top_idx = np.argsort(-ent)[: max(1, annotate_top)]
     for i in top_idx:
-        ax.text(share[i], ent[i], str(ids[i]), fontsize=7)
+        ax.text(share[i], ent[i], str(ids[i]), fontsize=11)
     out_path = out_dir / f"{prefix}_polysemy_entropy_scatter.png"
-    fig.tight_layout(); fig.savefig(out_path, dpi=200); plt_mod.close(fig)
+    fig.tight_layout(); save_figure(fig, out_path, dpi=200); plt_mod.close(fig)
     polysemy_result.setdefault("paths", {})["polysemy/entropy_scatter"] = out_path
     return out_path
 
@@ -471,13 +493,410 @@ def _compute_irregularity_scores(
     irr = np.full(n, np.nan, dtype=np.float64)
     rejected = np.zeros(n, dtype=np.bool_)
     for i, res in enumerate(fiber_results):
-        if not res or not res.get("pvalues"):
+        if not res:
             continue
-        p = float(np.min(res["pvalues"]))
+        p = min_fiber_violation_pvalue(res)
         min_p[i] = p
-        irr[i] = -math.log10(p + 1e-12)
-        rejected[i] = p < alpha
+        irr[i] = -math.log10(p + 1e-12) if math.isfinite(p) else 0.0
+        rejected[i] = math.isfinite(p) and p < alpha
     return min_p, irr, rejected
+
+
+def _first_dimension_array(fiber_results: List[Dict[str, Any]]) -> np.ndarray:
+    values = np.full(len(fiber_results), np.nan, dtype=np.float64)
+    for idx, res in enumerate(fiber_results):
+        if not res or not res.get("dimensions"):
+            continue
+        try:
+            value = float(res["dimensions"][0])
+        except Exception:
+            continue
+        if math.isfinite(value):
+            values[idx] = value
+    return values
+
+
+def _select_dimension_groups(
+    dims: np.ndarray,
+    irregularity: np.ndarray | None = None,
+    *,
+    per_group: int = 8,
+) -> Dict[str, List[int]]:
+    dims = np.asarray(dims, dtype=np.float64)
+    finite = np.where(np.isfinite(dims))[0]
+    if finite.size == 0:
+        return {"low": [], "mid": [], "high": [], "irregular": []}
+    order = finite[np.argsort(dims[finite], kind="mergesort")]
+    low = order[:per_group]
+    high = order[-per_group:][::-1]
+    median = float(np.median(dims[finite]))
+    mid = finite[np.argsort(np.abs(dims[finite] - median), kind="mergesort")[:per_group]]
+    irregular: np.ndarray
+    if irregularity is not None:
+        irr = np.asarray(irregularity, dtype=np.float64)
+        irr_finite = np.where(np.isfinite(irr))[0]
+        irregular = irr_finite[np.argsort(-irr[irr_finite], kind="mergesort")[:per_group]]
+    else:
+        irregular = np.asarray([], dtype=np.int64)
+    return {
+        "low": [int(i) for i in low.tolist()],
+        "mid": [int(i) for i in mid.tolist()],
+        "high": [int(i) for i in high.tolist()],
+        "irregular": [int(i) for i in irregular.tolist()],
+    }
+
+
+def save_patch_metric_heatmap(
+    *,
+    images: torch.Tensor,
+    image_ids: torch.Tensor,
+    bboxes: torch.Tensor,
+    values: np.ndarray,
+    dataset: str,
+    out_path: Path,
+    title: str,
+    colorbar_label: str,
+    max_images: int = 16,
+    cmap: str = "viridis",
+    alpha: float = 0.46,
+) -> Path | None:
+    """Project per-token scalar values back onto source image patches."""
+    plt_mod = _require_matplotlib()
+    if images is None or images.numel() == 0 or bboxes is None or bboxes.numel() == 0:
+        return None
+    values_np = np.asarray(values, dtype=np.float64).reshape(-1)
+    n = min(values_np.shape[0], int(image_ids.shape[0]), int(bboxes.shape[0]))
+    if n == 0:
+        return None
+    finite_mask = np.isfinite(values_np[:n])
+    if not np.any(finite_mask):
+        return None
+
+    img_ids_np = image_ids[:n].detach().cpu().numpy().astype(np.int64)
+    unique_ids, counts = np.unique(img_ids_np[finite_mask], return_counts=True)
+    ranked_ids = unique_ids[np.argsort(-counts, kind="mergesort")][: max(1, int(max_images))]
+    imgs = denormalize_images(images, dataset).detach().cpu()
+    bboxes_np = bboxes[:n].detach().cpu().numpy().astype(np.float64)
+
+    vmin = float(np.nanpercentile(values_np[finite_mask], 5))
+    vmax = float(np.nanpercentile(values_np[finite_mask], 95))
+    if not math.isfinite(vmin) or not math.isfinite(vmax) or abs(vmax - vmin) < 1e-9:
+        vmin = float(np.nanmin(values_np[finite_mask]))
+        vmax = float(np.nanmax(values_np[finite_mask]))
+    if abs(vmax - vmin) < 1e-9:
+        vmax = vmin + 1.0
+    norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+    cmap_obj = plt_mod.get_cmap(cmap)
+
+    cols = min(4, max(1, len(ranked_ids)))
+    rows = int(math.ceil(len(ranked_ids) / cols))
+    fig_width = max(7.0, 3.62 * cols + 1.05)
+    fig_height = max(5.1, 3.72 * rows + 1.20)
+    fig = plt_mod.figure(figsize=(fig_width, fig_height))
+    gs = fig.add_gridspec(
+        rows,
+        cols + 1,
+        width_ratios=[1.0] * cols + [0.055],
+        left=0.035,
+        right=0.925,
+        bottom=0.095,
+        top=0.900,
+        wspace=0.08,
+        hspace=0.30,
+    )
+    axes = np.empty((rows, cols), dtype=object)
+    for row in range(rows):
+        for col in range(cols):
+            axes[row, col] = fig.add_subplot(gs[row, col])
+            axes[row, col].axis("off")
+    cbar_ax = fig.add_subplot(gs[:, -1])
+
+    for panel_idx, img_id in enumerate(ranked_ids.tolist()):
+        ax = axes.flat[panel_idx]
+        img_idx = int(img_id)
+        if img_idx < 0 or img_idx >= imgs.shape[0]:
+            continue
+        base = imgs[img_idx]
+        np_img = base.permute(1, 2, 0).clamp(0, 1).numpy()
+        if np_img.shape[2] == 1:
+            np_img = np.repeat(np_img, 3, axis=2)
+        elif np_img.shape[2] > 3:
+            np_img = np_img[:, :, :3]
+        ax.imshow(np_img)
+        token_idxs = np.where((img_ids_np == img_idx) & finite_mask)[0]
+        for token_idx in token_idxs:
+            x0, y0, x1, y1 = bboxes_np[token_idx]
+            val = values_np[token_idx]
+            color = cmap_obj(norm(val))
+            rect = Rectangle(
+                (x0, y0),
+                max(1.0, x1 - x0),
+                max(1.0, y1 - y0),
+                linewidth=0.35,
+                edgecolor=color,
+                facecolor=color,
+                alpha=alpha,
+            )
+            ax.add_patch(rect)
+        ax.set_title(f"image {img_idx}: {len(token_idxs)} tokens", fontsize=14, pad=10)
+
+    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label(colorbar_label, labelpad=10, fontsize=14)
+    cbar.ax.tick_params(labelsize=12)
+    fig.suptitle(title, fontsize=22, y=0.972)
+    fig.text(
+        0.035,
+        0.03,
+        "Each translucent square is one vision token projected back to its source image patch.",
+        fontsize=13,
+        color="#333333",
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, out_path, dpi=200)
+    plt_mod.close(fig)
+    return out_path
+
+
+def save_dimension_patch_gallery(
+    *,
+    images: torch.Tensor,
+    image_ids: torch.Tensor,
+    bboxes: torch.Tensor,
+    fiber_results: List[Dict[str, Any]],
+    dataset: str,
+    out_path: Path,
+    per_group: int = 8,
+) -> tuple[Path | None, Dict[str, List[int]]]:
+    """Save patch crops for low, mid, high dimension and high violation tokens."""
+    plt_mod = _require_matplotlib()
+    dims = _first_dimension_array(fiber_results)
+    _min_p, irregularity, _rejected = _compute_irregularity_scores(fiber_results, alpha=1.0)
+    groups = _select_dimension_groups(dims, irregularity, per_group=per_group)
+    group_order = [
+        ("low", "Low local dimension"),
+        ("mid", "Mid local dimension"),
+        ("high", "High local dimension"),
+        ("irregular", "Highest slope-increase violations"),
+    ]
+    if not any(groups[name] for name, _title in group_order):
+        return None, groups
+
+    imgs = denormalize_images(images, dataset).detach().cpu()
+    cols = max(1, int(per_group))
+    rows = len(group_order)
+    fig_width = max(10.5, 2.18 * cols + 1.05)
+    fig_height = max(8.2, 2.92 * rows + 1.35)
+    fig = plt_mod.figure(figsize=(fig_width, fig_height))
+    gs = fig.add_gridspec(
+        rows,
+        cols,
+        left=0.07,
+        right=0.985,
+        bottom=0.115,
+        top=0.855,
+        wspace=0.13,
+        hspace=0.66,
+    )
+    axes = np.empty((rows, cols), dtype=object)
+    for row in range(rows):
+        for col in range(cols):
+            axes[row, col] = fig.add_subplot(gs[row, col])
+            axes[row, col].axis("off")
+    row_centers = np.linspace(0.78, 0.20, rows)
+    for row_idx, (name, label) in enumerate(group_order):
+        fig.text(
+            0.028,
+            float(row_centers[row_idx]),
+            label,
+            ha="center",
+            va="center",
+            rotation=90,
+            fontsize=14,
+            color="#222222",
+        )
+        for col_idx, token_idx in enumerate(groups[name][:cols]):
+            if token_idx >= int(image_ids.shape[0]) or token_idx >= int(bboxes.shape[0]):
+                continue
+            img_idx = int(image_ids[token_idx])
+            if img_idx < 0 or img_idx >= imgs.shape[0]:
+                continue
+            patch = extract_patch_image(imgs[img_idx], bboxes[token_idx], upscale=112)
+            ax = axes[row_idx, col_idx]
+            ax.imshow(patch)
+            dim = dims[token_idx] if token_idx < dims.shape[0] else float("nan")
+            irr = irregularity[token_idx] if token_idx < irregularity.shape[0] else float("nan")
+            change_p = min_change_pvalue(fiber_results[token_idx])
+            ax.set_title(
+                f"tok {token_idx}\nd {dim:.2f}  I {irr:.2f}\np {change_p:.1e}",
+                fontsize=13,
+                pad=9,
+            )
+    fig.suptitle("Patch Tokens by Estimated Fiber Dimension", fontsize=22, y=0.965)
+    fig.text(
+        0.07,
+        0.035,
+        "I is -log10(p) for statistically significant slope increases; decreasing slope changes are not fiber-bundle violations.",
+        fontsize=13,
+        color="#333333",
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, out_path, dpi=200)
+    plt_mod.close(fig)
+    return out_path, groups
+
+
+def save_fiber_volume_curve_gallery(
+    *,
+    sorted_dists: np.ndarray,
+    images: torch.Tensor,
+    image_ids: torch.Tensor,
+    bboxes: torch.Tensor,
+    fiber_results: List[Dict[str, Any]],
+    dataset: str,
+    out_path: Path,
+    vol_min: int,
+    vol_max: int,
+    alpha: float,
+    per_group: int = 2,
+) -> tuple[Path | None, List[Dict[str, Any]]]:
+    """Save paper-style log-volume/log-radius curves next to patch crops."""
+    plt_mod = _require_matplotlib()
+    dims = _first_dimension_array(fiber_results)
+    min_p, irregularity, rejected = _compute_irregularity_scores(fiber_results, alpha)
+    groups = _select_dimension_groups(dims, irregularity, per_group=per_group)
+    group_titles = {
+        "low": "Low dim",
+        "mid": "Mid dim",
+        "high": "High dim",
+        "irregular": "Violation",
+    }
+    selected: list[tuple[str, int]] = []
+    used_tokens: set[int] = set()
+    # The paper figure should be legible at normal page width. Use one
+    # representative token per group instead of an eight-row diagnostic strip.
+    for group_name in ("low", "mid", "high", "irregular"):
+        for token_idx in groups[group_name]:
+            if token_idx not in used_tokens:
+                selected.append((group_name, token_idx))
+                used_tokens.add(int(token_idx))
+                break
+    if not selected:
+        return None, []
+
+    npts = int(sorted_dists.shape[0])
+    start = max(1, min(int(vol_min), max(1, npts - 2)))
+    stop = min(int(vol_max), max(start + 2, npts - 1))
+    if stop <= start:
+        return None, []
+    volumes = np.arange(start, stop, dtype=np.float64)
+    imgs = denormalize_images(images, dataset).detach().cpu()
+
+    panel_count = len(selected)
+    cols = min(2, max(1, panel_count))
+    rows_count = int(math.ceil(panel_count / cols))
+    fig = plt_mod.figure(figsize=(9.4, max(4.8, 3.15 * rows_count + 0.70)))
+    outer = fig.add_gridspec(
+        rows_count,
+        cols,
+        left=0.055,
+        right=0.985,
+        bottom=0.135,
+        top=0.855,
+        wspace=0.24,
+        hspace=0.42,
+    )
+    rows: list[dict[str, Any]] = []
+    for panel_idx, (group_name, token_idx) in enumerate(selected):
+        outer_cell = outer[panel_idx // cols, panel_idx % cols]
+        inner = outer_cell.subgridspec(
+            1,
+            2,
+            width_ratios=[0.68, 3.40],
+            wspace=0.56,
+        )
+        patch_ax = fig.add_subplot(inner[0, 0])
+        curve_ax = fig.add_subplot(inner[0, 1])
+        patch_ax.axis("off")
+        img_idx = int(image_ids[token_idx]) if token_idx < int(image_ids.shape[0]) else 0
+        if 0 <= img_idx < imgs.shape[0] and token_idx < int(bboxes.shape[0]):
+            patch_ax.imshow(extract_patch_image(imgs[img_idx], bboxes[token_idx], upscale=168))
+        dim = dims[token_idx] if token_idx < dims.shape[0] else float("nan")
+        irr = irregularity[token_idx] if token_idx < irregularity.shape[0] else float("nan")
+        pvalue = min_p[token_idx] if token_idx < min_p.shape[0] else float("nan")
+        reject_text = "reject" if token_idx < rejected.shape[0] and bool(rejected[token_idx]) else "no reject"
+        status_text = "reject" if reject_text == "reject" else "ok"
+        patch_ax.set_title(
+            f"{group_titles.get(group_name, group_name)}\n"
+            f"tok {token_idx}, img {img_idx}",
+            fontsize=13,
+            pad=7,
+        )
+
+        radii = np.asarray(sorted_dists[start:stop, token_idx], dtype=np.float64)
+        valid = np.isfinite(radii) & (radii > 1e-10)
+        if np.any(valid):
+            log_r = np.log(radii[valid])
+            log_v = np.log(volumes[valid])
+            curve_ax.plot(
+                log_r,
+                log_v,
+                marker="o",
+                markersize=4.4,
+                linewidth=2.1,
+                color="#2f5d8a",
+                markerfacecolor="white",
+                markeredgewidth=1.0,
+            )
+        res = fiber_results[token_idx] if token_idx < len(fiber_results) else {}
+        strat_radii = [float(v) for v in (res.get("strat_radii") or []) if math.isfinite(float(v)) and float(v) > 0]
+        dims_seq = [float(v) for v in (res.get("dimensions") or []) if math.isfinite(float(v))]
+        pvalues = [float(v) for v in (res.get("pvalues") or []) if math.isfinite(float(v))]
+        for radius in strat_radii[1:]:
+            curve_ax.axvline(np.log(radius), color="#c44e52", linestyle="--", lw=1.4, alpha=0.90)
+        slope_text = " -> ".join(f"{v:.1f}" for v in dims_seq[:4]) if dims_seq else "n/a"
+        curve_ax.set_title(
+            f"d={dim:.2f}, I={irr:.2f}, {status_text}\nslopes {slope_text}",
+            fontsize=14,
+            pad=6,
+        )
+        curve_ax.set_xlabel("")
+        curve_ax.set_ylabel("")
+        curve_ax.tick_params(labelsize=13)
+        curve_ax.grid(alpha=0.26, linewidth=0.7)
+        curve_ax.set_facecolor("#fbfbfb")
+        for spine in curve_ax.spines.values():
+            spine.set_alpha(0.60)
+        rows.append(
+            {
+                "group": group_name,
+                "token_index": int(token_idx),
+                "image_id": int(img_idx),
+                "dimension": float(dim) if math.isfinite(float(dim)) else float("nan"),
+                "irregularity": float(irr) if math.isfinite(float(irr)) else float("nan"),
+                "min_fiber_violation_pvalue": float(pvalue) if math.isfinite(float(pvalue)) else float("nan"),
+                "slopes": dims_seq,
+                "change_pvalues": pvalues,
+            }
+        )
+    for empty_idx in range(panel_count, rows_count * cols):
+        ax = fig.add_subplot(outer[empty_idx // cols, empty_idx % cols])
+        ax.axis("off")
+
+    fig.suptitle("Fiber-Bundle Volume Curves Projected to Vision Patches", fontsize=21, y=0.965)
+    fig.text(
+        0.055,
+        0.045,
+        "Y: log neighbor count. X: log radius. Red dashed line: detected change point.\n"
+        "A significant upward slope change is counted as a fiber-bundle violation.",
+        fontsize=12.5,
+        color="#333333",
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, out_path, dpi=320)
+    plt_mod.close(fig)
+    return out_path, rows
 
 
 def _singular_token_mask(fiber_results: List[Dict[str, Any]], alpha: float) -> np.ndarray:
@@ -516,12 +935,17 @@ def select_irregular_tokens(
     to its source image index.
     """
     irregs = []
+    _min_p, irr_scores, _rejected = _compute_irregularity_scores(fiber_results, alpha=1.0)
     for idx, res in enumerate(fiber_results):
-        if not res or not res.get("pvalues"):
+        if not res:
             continue
-        pval = res["pvalues"][0]
+        irr_val = irr_scores[idx] if idx < irr_scores.shape[0] else float("nan")
+        if not math.isfinite(float(irr_val)):
+            continue
+        if float(irr_val) <= 0.0:
+            continue
         irregs.append((
-            -np.log10(pval + 1e-12),
+            float(irr_val),
             res["dimensions"][0] if res.get("dimensions") else np.nan,
             idx,
             neighborhood_dims[idx] if neighborhood_dims and idx < len(neighborhood_dims) else np.nan,

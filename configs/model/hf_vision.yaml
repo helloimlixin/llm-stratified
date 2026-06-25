@@ -1,0 +1,16 @@
+# Frozen Hugging Face vision encoder + trainable linear head.
+name: hf_vision
+
+frozen_backbone: hf_vision
+frozen_backbone_model: google/siglip2-base-patch16-224
+
+timm_model: null
+timm_pretrained: false
+
+patch_size: 16
+embed_dim: 768
+depth: 12
+num_heads: 12
+mlp_ratio: 4.0
+dropout: 0.0
+compile: false

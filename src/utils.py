@@ -62,7 +62,12 @@ def to_serializable(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     if isinstance(obj, (np.floating, np.integer)):
-        return float(obj) if isinstance(obj, np.floating) else int(obj)
+        value = float(obj) if isinstance(obj, np.floating) else int(obj)
+        if isinstance(value, float) and not np.isfinite(value):
+            return None
+        return value
+    if isinstance(obj, float) and not np.isfinite(obj):
+        return None
     if isinstance(obj, torch.Tensor):
         return obj.cpu().numpy().tolist()
     return obj

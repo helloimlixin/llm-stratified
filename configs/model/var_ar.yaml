@@ -1,0 +1,17 @@
+# Frozen FoundationVision VAR autoregressive image generator backbone.
+name: var_ar
+
+frozen_backbone: var
+frozen_backbone_model: var_d30
+
+timm_model: null
+timm_pretrained: false
+
+# VAR-d30 at 256px exposes the final 16x16 next-scale hidden states.
+patch_size: 16
+embed_dim: 1920
+depth: 30
+num_heads: 30
+mlp_ratio: 4.0
+dropout: 0.0
+compile: false

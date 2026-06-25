@@ -1,0 +1,61 @@
+# @package _global_
+# Analysis-only COCO probe for the strongest practical local DINOv3 checkpoint.
+# DINOv3 ViT-7B is the largest released checkpoint, but this ViT-Huge+ run is
+# the largest DINOv3 model that is realistic on a 16GB local GPU.
+defaults:
+  - override /data: coco
+  - override /model: timm_vit
+  - override /training: debug
+  - override /fiber: sparse_probe
+  - override /sam_fiber: disabled
+  - override /volume_probe: disabled
+
+data:
+  img_size: 224
+  batch_size: 1
+  batch_size_test: 1
+  num_workers: 0
+  subset_train: 64
+  subset_test: 64
+
+model:
+  timm_model: vit_huge_plus_patch16_dinov3.lvd1689m
+  timm_pretrained: true
+  patch_size: 16
+  embed_dim: 1280
+  num_heads: 20
+
+training:
+  # No classifier training; run only frozen-token fiber and sparse probes.
+  epochs: 0
+  lr: 1e-4
+  save_interval: 1
+
+fiber:
+  embed_interval: 1
+  # 16 complete 14x14 patch-token grids, matching the SAM-Huge visual panels.
+  max_tokens: 3136
+  embed_full_val: false
+  embedding_animation: false
+  vol_min: 8
+  vol_max: 64
+  ws: 4
+  alpha: 0.005
+  nstrat: 3
+  sparse_probe: true
+  sparse_probe_neighbor_k: 128
+  sparse_probe_min_patches: 12
+  sparse_probe_max_anchors: null
+  sparse_probe_dictionary_size: 128
+  sparse_probe_residual_threshold: 0.30
+  sparse_probe_max_sparsity: 64
+  sparse_probe_algorithm: omp
+  sparse_probe_heatmap_images: 16
+  sparse_probe_log_summary_plot: false
+  sparse_probe_volume_curve: true
+  sparse_probe_volume_curve_volumes: [8, 16, 32, 64, 128, 256, 512]
+
+wandb:
+  enabled: true
+  project: stratified-manifold-learning
+  tags: [coco, dinov3, dinov3-huge-plus, fiber-analysis, sparse-omp]

@@ -1,7 +1,7 @@
-# TinyViT Training Configuration
+# Stratified vision probe configuration
 # Usage: python src/train.py [overrides]
 # Examples:
-#   python src/train.py                           # Default CIFAR10 training
+#   python src/train.py                           # Default CIFAR10 training-compatible run
 #   python src/train.py data=fakedata             # No-download smoke test dataset
 #   python src/train.py data=stl10 training.epochs=100  # STL10 with 100 epochs
 #   python src/train.py model=timm_vit            # Use timm ViT backbone
@@ -9,6 +9,7 @@
 #   python src/train.py compute=ddp               # Multi-GPU with DDP
 #   python src/train.py +experiment=quick_test    # Quick test run (defaults to data=fakedata)
 #   python src/train.py +experiment=volume_probe  # No-training volume probe (tokens vs patch embeds vs pixel patches)
+#   python src/train.py +experiment=coco_dinov3_huge_sparse_fiber  # Current frozen-encoder COCO probe
 
 defaults:
   - model: tinyvit

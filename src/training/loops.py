@@ -16,9 +16,20 @@ def get_criterion(task_type: str, label_smoothing: float = 0.0) -> nn.Module:
     return nn.BCEWithLogitsLoss() if task_type == "multilabel" else nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
 
+def _multilabel_micro_f1_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    preds = logits > 0
+    targets = labels > 0.5
+    tp = torch.logical_and(preds, targets).sum(dtype=torch.float32)
+    fp = torch.logical_and(preds, ~targets).sum(dtype=torch.float32)
+    fn = torch.logical_and(~preds, targets).sum(dtype=torch.float32)
+    denom = (2 * tp) + fp + fn
+    perfect_empty = torch.ones((), device=logits.device, dtype=torch.float32)
+    return torch.where(denom > 0, (2 * tp) / denom.clamp_min(1.0), perfect_empty)
+
+
 def _accuracy_from_logits(logits: torch.Tensor, labels: torch.Tensor, task_type: str) -> torch.Tensor:
     if task_type == "multilabel":
-        return ((logits > 0).to(labels.dtype) == labels).float().mean()
+        return _multilabel_micro_f1_from_logits(logits, labels)
     return (logits.argmax(dim=-1) == labels).float().mean()
 
 
@@ -71,6 +82,7 @@ def _log_interval_progress(
 
 @torch.no_grad()
 def multilabel_accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
+    """Backward-compatible name for the multilabel micro-F1 training metric."""
     return _accuracy_from_logits(logits, targets, "multilabel").item()
 
 

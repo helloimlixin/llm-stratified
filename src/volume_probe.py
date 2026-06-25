@@ -40,6 +40,7 @@ from fiber.geometry import (
     sorted_distance_matrix,
     summarize_stratifications,
 )
+from fiber.figure_io import save_figure
 from models import DinoV2Wrapper, TinyViT, TimmViTWrapper, resolve_patch_size
 from utils import denormalize_images, seed_everything, to_serializable
 
@@ -317,10 +318,13 @@ def _scatter_metric(ax, coords: np.ndarray, values: np.ndarray, *, title: str, c
             alpha=0.85,
             linewidths=0,
         )
-        plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04, label=colorbar_label)
-    ax.set_title(title)
-    ax.set_xlabel("PC1")
-    ax.set_ylabel("PC2")
+        cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(colorbar_label, fontsize=13)
+        cbar.ax.tick_params(labelsize=11)
+    ax.set_title(title, fontsize=15, pad=9)
+    ax.set_xlabel("PC1", fontsize=12)
+    ax.set_ylabel("PC2", fontsize=12)
+    ax.tick_params(labelsize=11)
     ax.grid(alpha=0.20, linewidth=0.5)
 
 
@@ -447,10 +451,10 @@ def _save_representation_dashboard(
         f"{summary.get('mean_dim', float('nan')):.2f}, "
         "irregular_ratio="
         f"{summary.get('irregular_ratio', float('nan')):.3f}",
-        fontsize=12,
+        fontsize=18,
     )
     fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    save_figure(fig, out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return True
 
@@ -495,17 +499,18 @@ def _save_scaling_curves_figure(
             title += " | dims " + ",".join(f"{dim:.1f}" for dim in dims[:3])
         if np.isfinite(min_p):
             title += f" | p={min_p:.2e}"
-        ax.set_title(title, fontsize=10)
-        ax.set_xlabel("log10(radius)")
-        ax.set_ylabel("log10(neighbor count k)")
+        ax.set_title(title, fontsize=13, pad=8)
+        ax.set_xlabel("log10(radius)", fontsize=12)
+        ax.set_ylabel("log10(neighbor count k)", fontsize=12)
+        ax.tick_params(labelsize=11)
         ax.grid(alpha=0.25)
 
     for ax in axes.flatten()[anchor_idx.size :]:
         ax.axis("off")
 
-    fig.suptitle("Local Volume Scaling Curves: Slope Estimates Local Dimension", fontsize=12)
+    fig.suptitle("Local Volume Scaling Curves: Slope Estimates Local Dimension", fontsize=18)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    save_figure(fig, out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return True
 

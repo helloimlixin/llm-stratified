@@ -30,6 +30,108 @@ from training.model_factory import build_classifier_model
 from training.wandb_utils import finish_wandb_run, init_wandb_run
 
 
+def _offset_local_image_ids_for_gather(
+    img_ids: torch.Tensor,
+    images: torch.Tensor,
+    *,
+    device: torch.device,
+    rank: int,
+    world_size: int,
+    accelerator=None,
+) -> torch.Tensor:
+    """Offset local image IDs so gathered patch tokens reference gathered images."""
+    img_ids = img_ids.to(device)
+    if world_size <= 1:
+        return img_ids
+
+    local_count = torch.tensor([int(images.shape[0])], device=device, dtype=torch.long)
+    if accelerator is not None:
+        image_counts = accelerator.gather_for_metrics(local_count)
+    elif dist.is_available() and dist.is_initialized():
+        image_counts = gather_ddp_tensor(local_count, world_size)
+    else:
+        return img_ids
+
+    offset = image_counts[: int(rank)].sum().to(device=device, dtype=img_ids.dtype)
+    return img_ids + offset
+
+
+def _image_aligned_prefix_length(img_ids: torch.Tensor, max_tokens: int | None) -> int:
+    """Largest prefix length <= max_tokens that does not split a source image."""
+    n_tokens = int(img_ids.numel())
+    if max_tokens is None:
+        return n_tokens
+    limit = min(max(0, int(max_tokens)), n_tokens)
+    if limit == 0 or limit == n_tokens:
+        return limit
+
+    ids_cpu = img_ids.detach().cpu().long()
+    while limit > 0:
+        boundary_id = int(ids_cpu[limit - 1].item())
+        split_boundary_image = bool(torch.any(ids_cpu[limit:] == boundary_id).item())
+        if not split_boundary_image:
+            break
+        same_before = torch.nonzero(ids_cpu[:limit] == boundary_id, as_tuple=False).flatten()
+        if same_before.numel() == 0:
+            break
+        next_limit = int(same_before[0].item())
+        if next_limit == limit:
+            break
+        limit = next_limit
+    return limit
+
+
+def _compact_images_for_token_ids(
+    images: torch.Tensor,
+    img_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Drop unreferenced images and remap token image IDs to the compact buffer."""
+    if int(img_ids.numel()) == 0:
+        return images[:0], img_ids
+    if int(images.shape[0]) == 0:
+        return images, img_ids
+
+    keep = torch.unique(img_ids.detach().long(), sorted=True)
+    keep = keep[(keep >= 0) & (keep < int(images.shape[0]))]
+    if int(keep.numel()) == 0:
+        return images[:0], img_ids[:0]
+
+    compact_images = images.index_select(0, keep.to(device=images.device))
+    remap = torch.full(
+        (int(keep.max().item()) + 1,),
+        -1,
+        dtype=torch.long,
+        device=img_ids.device,
+    )
+    remap[keep.to(device=img_ids.device)] = torch.arange(
+        int(keep.numel()), dtype=torch.long, device=img_ids.device
+    )
+    compact_img_ids = remap[img_ids.long()].to(dtype=img_ids.dtype)
+    return compact_images, compact_img_ids
+
+
+def _trim_to_image_aligned_tokens(
+    embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    images: torch.Tensor,
+    bboxes: torch.Tensor,
+    patch_indices: torch.Tensor,
+    img_ids: torch.Tensor,
+    pred_labels: torch.Tensor,
+    max_tokens: int | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Trim token tensors without retaining a partial final source image."""
+    limit = _image_aligned_prefix_length(img_ids, max_tokens)
+    embeddings = embeddings[:limit]
+    labels = labels[:limit]
+    bboxes = bboxes[:limit]
+    patch_indices = patch_indices[:limit]
+    img_ids = img_ids[:limit]
+    pred_labels = pred_labels[:limit]
+    images, img_ids = _compact_images_for_token_ids(images, img_ids)
+    return embeddings, labels, images, bboxes, patch_indices, img_ids, pred_labels
+
+
 def _make_grad_scaler(device: torch.device):
     if device.type != "cuda":
         return None
@@ -139,6 +241,7 @@ def run_training(
     base_train_loader, base_test_loader = train_loader, test_loader
     class_names = get_class_names(test_loader.dataset, dataset_name) if fiber_cfg.enabled else None
     train_sampler = train_loader.sampler if use_ddp and not use_accelerate else None
+    metric_name = "micro_f1" if task == "multilabel" else "acc"
 
     # Wandb init
     if wandb_on and is_main_process:
@@ -246,6 +349,180 @@ def run_training(
         if is_main_process:
             print(f"\nStarting {dataset_name} run {run_idx + 1}/{num_runs} -> {run_dir}")
 
+        if num_epochs <= 0:
+            if is_main_process:
+                print(
+                    f"[analysis_only] training.epochs={num_epochs}; skipping optimizer steps and "
+                    "running pretrained fiber analysis only.",
+                    flush=True,
+                )
+            if fiber_cfg.enabled:
+                from fiber.analysis import analyze_fiber_epoch
+                from fiber.patch_tokens import collect_patch_tokens
+
+                epoch = 0
+                if use_ddp and not use_accelerate and dist.is_initialized():
+                    dist.barrier()
+                if use_accelerate:
+                    accelerator.wait_for_everyone()
+
+                if is_main_process:
+                    print(f"[fiber] Epoch {epoch:03d}: collecting patch tokens...", flush=True)
+                    t0 = time.time()
+
+                local_max = None if fiber_cfg.embed_full_val else max(1, math.ceil(fiber_cfg.max_tokens / world_size))
+                model_unwrapped = (
+                    accelerator.unwrap_model(model) if use_accelerate else (model.module if use_ddp else model)
+                )
+                patch_sz_eff = resolve_patch_size(model_unwrapped) or patch_size_used
+                embeddings, labels, images, bboxes, patch_indices, img_ids, pred_labels = collect_patch_tokens(
+                    model_unwrapped,
+                    test_loader,
+                    device,
+                    patch_sz_eff,
+                    local_max,
+                    show_progress=is_main_process,
+                )
+
+                if is_main_process:
+                    print(f"[fiber] Epoch {epoch:03d}: collected in {time.time() - t0:.1f}s", flush=True)
+
+                if use_accelerate:
+                    img_ids = _offset_local_image_ids_for_gather(
+                        img_ids,
+                        images,
+                        device=device,
+                        rank=rank,
+                        world_size=world_size,
+                        accelerator=accelerator,
+                    )
+                    embeddings = accelerator.gather_for_metrics(embeddings.to(device))
+                    labels = accelerator.gather_for_metrics(labels.to(device))
+                    images = accelerator.gather_for_metrics(images.to(device))
+                    bboxes = accelerator.gather_for_metrics(bboxes.to(device))
+                    patch_indices = accelerator.gather_for_metrics(patch_indices.to(device))
+                    img_ids = accelerator.gather_for_metrics(img_ids)
+                    pred_labels = accelerator.gather_for_metrics(pred_labels.to(device))
+                elif use_ddp:
+                    img_ids = _offset_local_image_ids_for_gather(
+                        img_ids,
+                        images,
+                        device=device,
+                        rank=rank,
+                        world_size=world_size,
+                    )
+                    embeddings = gather_ddp_tensor(embeddings.to(device), world_size)
+                    labels = gather_ddp_tensor(labels.to(device), world_size)
+                    images = gather_ddp_tensor(images.to(device), world_size)
+                    bboxes = gather_ddp_tensor(bboxes.to(device), world_size)
+                    patch_indices = gather_ddp_tensor(patch_indices.to(device), world_size)
+                    img_ids = gather_ddp_tensor(img_ids, world_size)
+                    pred_labels = gather_ddp_tensor(pred_labels.to(device), world_size)
+
+                if is_main_process and embed_dir and analysis_dir and run_dir:
+                    if not fiber_cfg.embed_full_val:
+                        (
+                            embeddings,
+                            labels,
+                            images,
+                            bboxes,
+                            patch_indices,
+                            img_ids,
+                            pred_labels,
+                        ) = _trim_to_image_aligned_tokens(
+                            embeddings,
+                            labels,
+                            images,
+                            bboxes,
+                            patch_indices,
+                            img_ids,
+                            pred_labels,
+                            fiber_cfg.max_tokens,
+                        )
+
+                    embeddings = embeddings.cpu()
+                    labels = labels.cpu()
+                    images = images.cpu()
+                    bboxes = bboxes.cpu()
+                    patch_indices = patch_indices.cpu()
+                    img_ids = img_ids.cpu()
+                    pred_labels = pred_labels.cpu()
+
+                    print(f"[fiber] Epoch {epoch:03d}: running analysis...", flush=True)
+                    t1 = time.time()
+                    analysis = analyze_fiber_epoch(
+                        epoch=epoch,
+                        embeddings=embeddings,
+                        labels=labels,
+                        images=images,
+                        bboxes=bboxes,
+                        patch_indices=patch_indices,
+                        image_ids=img_ids,
+                        pred_labels=pred_labels,
+                        num_classes=num_classes,
+                        class_names=class_names,
+                        dataset=dataset_name,
+                        base_dir=run_dir,
+                        analysis_dir=analysis_dir,
+                        embed_dir=embed_dir,
+                        vol_min=fiber_cfg.vol_min,
+                        vol_max=fiber_cfg.vol_max,
+                        ws=fiber_cfg.ws,
+                        alpha=fiber_cfg.alpha,
+                        nstrat=fiber_cfg.nstrat,
+                        neighborhood_size=fiber_cfg.neighborhood_size or patch_sz_eff + 1,
+                        polysemy=fiber_cfg.polysemy,
+                        polysemy_k=fiber_cfg.polysemy_k,
+                        polysemy_anchors=fiber_cfg.polysemy_anchors,
+                        polysemy_grid_cols=fiber_cfg.polysemy_grid_cols,
+                        vit_token_polysemy=fiber_cfg.vit_token_polysemy,
+                        vit_token_polysemy_k=fiber_cfg.vit_token_polysemy_k,
+                        vit_token_polysemy_topk=fiber_cfg.vit_token_polysemy_topk,
+                        vit_token_polysemy_ablate=fiber_cfg.vit_token_polysemy_ablate,
+                        vit_token_polysemy_ablate_batches=fiber_cfg.vit_token_polysemy_ablate_batches,
+                        vit_token_polysemy_min_count=fiber_cfg.vit_token_polysemy_min_count,
+                        vit_token_polysemy_ablate_reps=fiber_cfg.vit_token_polysemy_ablate_reps,
+                        sparse_probe=fiber_cfg.sparse_probe,
+                        sparse_probe_radius=fiber_cfg.sparse_probe_radius,
+                        sparse_probe_neighbor_k=fiber_cfg.sparse_probe_neighbor_k,
+                        sparse_probe_auto_neighbor_k=fiber_cfg.sparse_probe_auto_neighbor_k,
+                        sparse_probe_auto_radius_quantile=fiber_cfg.sparse_probe_auto_radius_quantile,
+                        sparse_probe_min_patches=fiber_cfg.sparse_probe_min_patches,
+                        sparse_probe_max_anchors=fiber_cfg.sparse_probe_max_anchors,
+                        sparse_probe_dictionary_size=fiber_cfg.sparse_probe_dictionary_size,
+                        sparse_probe_residual_threshold=fiber_cfg.sparse_probe_residual_threshold,
+                        sparse_probe_max_sparsity=fiber_cfg.sparse_probe_max_sparsity,
+                        sparse_probe_algorithm=fiber_cfg.sparse_probe_algorithm,
+                        sparse_probe_iht_steps=fiber_cfg.sparse_probe_iht_steps,
+                        sparse_probe_iht_lr=fiber_cfg.sparse_probe_iht_lr,
+                        sparse_probe_heatmap_images=fiber_cfg.sparse_probe_heatmap_images,
+                        sparse_probe_log_summary_plot=fiber_cfg.sparse_probe_log_summary_plot,
+                        sparse_probe_volume_curve=(
+                            fiber_cfg.sparse_probe_volume_curve or fiber_cfg.sparse_probe_global_curve
+                        ),
+                        sparse_probe_volume_curve_volumes=(
+                            fiber_cfg.sparse_probe_volume_curve_volumes
+                            or fiber_cfg.sparse_probe_global_curve_volumes
+                        ),
+                        wandb_module=wandb if wandb_on else None,
+                        model=model_unwrapped,
+                        device=device,
+                        img_size=final_img_size,
+                        patch_size=patch_sz_eff,
+                        val_loader=test_loader,
+                    )
+                    print(f"[fiber] Epoch {epoch:03d}: done in {time.time() - t1:.1f}s", flush=True)
+                    fiber_history.append(analysis["fiber_summary"])
+                    if fiber_cfg.embedding_animation:
+                        embedding_animation_snapshots.append(
+                            (epoch, embeddings.detach().cpu().clone(), labels.detach().cpu().clone())
+                        )
+                    final_dims, final_coords_3d, final_tsne_3d = (
+                        analysis["final_dims"],
+                        analysis["final_coords_3d"],
+                        analysis["final_tsne_3d"],
+                    )
+
         for epoch in range(num_epochs):
             # Training
             if use_accelerate:
@@ -292,30 +569,35 @@ def run_training(
                 "epoch": epoch,
                 "lr": lr_now,
                 "train_loss": train_loss,
-                "train_acc": train_acc,
                 "eval_loss": eval_loss,
+                "metric_name": metric_name,
+                f"train_{metric_name}": train_acc,
+                f"eval_{metric_name}": eval_acc,
+                "train_acc": train_acc,
                 "eval_acc": eval_acc,
             }
 
             if is_main_process:
                 print(
-                    f"[{dataset_name}] Epoch {epoch:03d} | lr {lr_now:.2e} | train {train_loss:.4f}/{train_acc:.4f} | "
-                    f"val {eval_loss:.4f}/{eval_acc:.4f}"
+                    f"[{dataset_name}] Epoch {epoch:03d} | lr {lr_now:.2e} | "
+                    f"train loss/{metric_name} {train_loss:.4f}/{train_acc:.4f} | "
+                    f"val loss/{metric_name} {eval_loss:.4f}/{eval_acc:.4f}"
                 )
                 if fiber_cfg.enabled:
                     train_history.append(log_row)
                 if wandb_on and wandb:
                     try:
-                        wandb.log(
-                            {
-                                "epoch": epoch,
-                                "lr": lr_now,
-                                "train/loss": train_loss,
-                                "train/acc": train_acc,
-                                "val/loss": eval_loss,
-                                "val/acc": eval_acc,
-                            }
-                        )
+                        payload = {
+                            "epoch": epoch,
+                            "lr": lr_now,
+                            "train/loss": train_loss,
+                            "val/loss": eval_loss,
+                            f"train/{metric_name}": train_acc,
+                            f"val/{metric_name}": eval_acc,
+                        }
+                        if metric_name == "acc":
+                            payload.update({"train/acc": train_acc, "val/acc": eval_acc})
+                        wandb.log(payload)
                     except Exception as e:
                         print(f"[wandb] log error: {e}")
 
@@ -347,31 +629,57 @@ def run_training(
 
                 # Gather across ranks
                 if use_accelerate:
+                    img_ids = _offset_local_image_ids_for_gather(
+                        img_ids,
+                        images,
+                        device=device,
+                        rank=rank,
+                        world_size=world_size,
+                        accelerator=accelerator,
+                    )
                     embeddings = accelerator.gather_for_metrics(embeddings.to(device))
                     labels = accelerator.gather_for_metrics(labels.to(device))
                     images = accelerator.gather_for_metrics(images.to(device))
                     bboxes = accelerator.gather_for_metrics(bboxes.to(device))
                     patch_indices = accelerator.gather_for_metrics(patch_indices.to(device))
-                    img_ids = accelerator.gather_for_metrics(img_ids.to(device))
+                    img_ids = accelerator.gather_for_metrics(img_ids)
                     pred_labels = accelerator.gather_for_metrics(pred_labels.to(device))
                 elif use_ddp:
+                    img_ids = _offset_local_image_ids_for_gather(
+                        img_ids,
+                        images,
+                        device=device,
+                        rank=rank,
+                        world_size=world_size,
+                    )
                     embeddings = gather_ddp_tensor(embeddings.to(device), world_size)
                     labels = gather_ddp_tensor(labels.to(device), world_size)
                     images = gather_ddp_tensor(images.to(device), world_size)
                     bboxes = gather_ddp_tensor(bboxes.to(device), world_size)
                     patch_indices = gather_ddp_tensor(patch_indices.to(device), world_size)
-                    img_ids = gather_ddp_tensor(img_ids.to(device), world_size)
+                    img_ids = gather_ddp_tensor(img_ids, world_size)
                     pred_labels = gather_ddp_tensor(pred_labels.to(device), world_size)
 
                 if is_main_process and embed_dir and analysis_dir and run_dir:
                     if not fiber_cfg.embed_full_val:
-                        embeddings = embeddings[: fiber_cfg.max_tokens]
-                        labels = labels[: fiber_cfg.max_tokens]
-                        bboxes = bboxes[: fiber_cfg.max_tokens]
-                        patch_indices = patch_indices[: fiber_cfg.max_tokens]
-                        img_ids = img_ids[: fiber_cfg.max_tokens]
-                        pred_labels = pred_labels[: fiber_cfg.max_tokens]
-                        # images is a unique-image buffer; don't truncate by max_tokens
+                        (
+                            embeddings,
+                            labels,
+                            images,
+                            bboxes,
+                            patch_indices,
+                            img_ids,
+                            pred_labels,
+                        ) = _trim_to_image_aligned_tokens(
+                            embeddings,
+                            labels,
+                            images,
+                            bboxes,
+                            patch_indices,
+                            img_ids,
+                            pred_labels,
+                            fiber_cfg.max_tokens,
+                        )
 
                     embeddings = embeddings.cpu()
                     labels = labels.cpu()
@@ -417,6 +725,7 @@ def run_training(
                         vit_token_polysemy_ablate_reps=fiber_cfg.vit_token_polysemy_ablate_reps,
                         sparse_probe=fiber_cfg.sparse_probe,
                         sparse_probe_radius=fiber_cfg.sparse_probe_radius,
+                        sparse_probe_neighbor_k=fiber_cfg.sparse_probe_neighbor_k,
                         sparse_probe_auto_neighbor_k=fiber_cfg.sparse_probe_auto_neighbor_k,
                         sparse_probe_auto_radius_quantile=fiber_cfg.sparse_probe_auto_radius_quantile,
                         sparse_probe_min_patches=fiber_cfg.sparse_probe_min_patches,
@@ -424,6 +733,18 @@ def run_training(
                         sparse_probe_dictionary_size=fiber_cfg.sparse_probe_dictionary_size,
                         sparse_probe_residual_threshold=fiber_cfg.sparse_probe_residual_threshold,
                         sparse_probe_max_sparsity=fiber_cfg.sparse_probe_max_sparsity,
+                        sparse_probe_algorithm=fiber_cfg.sparse_probe_algorithm,
+                        sparse_probe_iht_steps=fiber_cfg.sparse_probe_iht_steps,
+                        sparse_probe_iht_lr=fiber_cfg.sparse_probe_iht_lr,
+                        sparse_probe_heatmap_images=fiber_cfg.sparse_probe_heatmap_images,
+                        sparse_probe_log_summary_plot=fiber_cfg.sparse_probe_log_summary_plot,
+                        sparse_probe_volume_curve=(
+                            fiber_cfg.sparse_probe_volume_curve or fiber_cfg.sparse_probe_global_curve
+                        ),
+                        sparse_probe_volume_curve_volumes=(
+                            fiber_cfg.sparse_probe_volume_curve_volumes
+                            or fiber_cfg.sparse_probe_global_curve_volumes
+                        ),
                         wandb_module=wandb if wandb_on else None,
                         model=model_unwrapped,
                         device=device,
@@ -456,6 +777,7 @@ def run_training(
                         "train_acc": train_acc,
                         "eval_loss": eval_loss,
                         "eval_acc": eval_acc,
+                        "metric_name": metric_name,
                         "dataset": dataset_name,
                         "task": task,
                         "img_size": final_img_size,
@@ -478,14 +800,26 @@ def run_training(
             with open(run_dir / "fiber_history.json", "w") as fp:
                 json.dump(fiber_history, fp, indent=2)
             if final_coords_3d is not None and final_dims is not None:
+                summary_plot_path = run_dir / "fiber_bundle_summary.png"
                 save_training_summary_plot(
                     train_history,
                     fiber_history,
                     final_coords_3d,
                     final_dims,
-                    run_dir / "fiber_bundle_summary.png",
+                    summary_plot_path,
                 )
-                print(f"Saved summary plot -> {run_dir / 'fiber_bundle_summary.png'}")
+                print(f"Saved summary plot -> {summary_plot_path}")
+                if wandb_on and wandb:
+                    try:
+                        caption = "Final fiber bundle summary for this run."
+                        wandb.log({
+                            "fiber/final_summary_plot": wandb.Image(
+                                str(summary_plot_path),
+                                caption=caption,
+                            )
+                        })
+                    except Exception as e:
+                        print(f"[wandb] skipped final summary plot: {e}")
             if fiber_cfg.embedding_animation and embedding_animation_snapshots:
                 try:
                     animation_frames = build_embedding_animation_frames(embedding_animation_snapshots)

@@ -199,14 +199,14 @@ def _overlay_masks(
     return Image.alpha_composite(base, overlay).convert("RGB")
 
 
-def _make_image_grid(images: list[Image.Image], *, cols: int = 2, pad: int = 8) -> Image.Image | None:
+def _make_image_grid(images: list[Image.Image], *, cols: int = 4, pad: int = 10) -> Image.Image | None:
     if Image is None or not images:
         return None
     cols = max(1, min(cols, len(images)))
     rows = int(np.ceil(len(images) / cols))
     width = max(img.width for img in images)
     height = max(img.height for img in images)
-    grid = Image.new("RGB", (cols * width + (cols + 1) * pad, rows * height + (rows + 1) * pad), (14, 18, 24))
+    grid = Image.new("RGB", (cols * width + (cols + 1) * pad, rows * height + (rows + 1) * pad), (255, 255, 255))
     for idx, image in enumerate(images):
         row, col = divmod(idx, cols)
         x = pad + col * (width + pad)
@@ -429,6 +429,9 @@ def _write_token_processing_notes(
             "residual_threshold": config.get("sparse_probe_residual_threshold"),
             "dictionary_size": config.get("sparse_probe_dictionary_size"),
             "max_sparsity": config.get("sparse_probe_max_sparsity"),
+            "neighbor_k": config.get("sparse_probe_neighbor_k"),
+            "volume_curve": bool(config.get("sparse_probe_volume_curve")),
+            "volume_curve_volumes": config.get("sparse_probe_volume_curve_volumes"),
         },
     }
     with open(output_dir / "token_processing_summary.json", "w") as fp:
@@ -444,6 +447,7 @@ def _write_token_processing_notes(
         fp.write("- Object/segmentation signal: COCO instance boxes prompt SAM mask prediction; thresholded masks assign multi-hot object labels to patch-grid tokens.\n")
         fp.write("- Fiber analysis: local kNN volume scaling estimates token-level dimension and change-point irregularity.\n")
         fp.write("- Sparse probe: each eligible token neighborhood fits a local PCA dictionary over raw image patches and measures the sparsity needed to satisfy the configured residual target.\n")
+        fp.write("- Sparse volume curve: the center patch is evaluated across increasing neighborhood volumes with a freshly learned local dictionary at each volume.\n")
 
 
 @torch.no_grad()
@@ -474,10 +478,11 @@ def collect_sam_patch_tokens(
     pred_labels = []
     previews: list[dict[str, Any]] = []
     collected = 0
+    stop_collection = False
 
     iterator = tqdm(loader, desc="Collect SAM tokens", leave=False) if show_progress and tqdm else loader
     for batch in iterator:
-        if max_tokens is not None and collected >= max_tokens:
+        if stop_collection or (max_tokens is not None and collected >= max_tokens):
             break
         imgs, batch_labels = batch[0].to(device), batch[1].cpu()
         batch_indices = batch[2] if len(batch) > 2 else range(len(batch_labels))
@@ -489,8 +494,6 @@ def collect_sam_patch_tokens(
             label = batch_labels[item_idx]
             ds_idx_raw = batch_indices[item_idx]
             ds_idx = int(ds_idx_raw.item()) if isinstance(ds_idx_raw, torch.Tensor) else int(ds_idx_raw)
-            image_buffer_idx = len(images)
-            images.append(img.detach().cpu())
 
             inputs, img01 = model.prepare_single_image(img, dataset, device=device)
             embedding_map = model.get_image_embedding_map(inputs["pixel_values"])
@@ -500,6 +503,11 @@ def collect_sam_patch_tokens(
             pooled_tokens = _pool_embedding_map(embedding_map, grid_h=grid_h, grid_w=grid_w)
             patch_count = int(pooled_tokens.shape[0])
             grid_boxes = _grid_bboxes(image_h=image_h, image_w=image_w, grid_h=grid_h, grid_w=grid_w)
+            if max_tokens is not None and collected + patch_count > max_tokens:
+                stop_collection = True
+                break
+            image_buffer_idx = len(images)
+            images.append(img.detach().cpu())
 
             prompt_boxes_raw: list[tuple[float, float, float, float, int]] = []
             if has_instance_boxes:
@@ -547,7 +555,7 @@ def collect_sam_patch_tokens(
             )
             image_pred = _image_level_pred_label(label)
 
-            if masks and len(previews) < mask_preview_images:
+            if len(previews) < max(0, int(mask_preview_images)):
                 previews.append(
                     {
                         "image": img01.clone(),
@@ -562,8 +570,6 @@ def collect_sam_patch_tokens(
                 )
 
             for patch_id in range(patch_count):
-                if max_tokens is not None and collected >= max_tokens:
-                    break
                 patch_label = patch_labels[patch_id]
                 patch_pred = image_pred
                 if patch_label.numel() == num_classes and float(patch_label.max().item()) > 0:
@@ -575,6 +581,8 @@ def collect_sam_patch_tokens(
                 image_ids.append(torch.tensor(image_buffer_idx, dtype=torch.int32))
                 pred_labels.append(torch.tensor(patch_pred, dtype=torch.int64))
                 collected += 1
+        if stop_collection:
+            break
 
     if not embeddings:
         empty_labels = torch.empty((0, num_classes), dtype=torch.float32)
@@ -638,6 +646,16 @@ def run_sam_fiber_job(
         world_size=1,
     )
     full_test_dataset = test_loader.dataset
+    base_test_dataset = full_test_dataset
+    while hasattr(base_test_dataset, "dataset"):
+        base_test_dataset = base_test_dataset.dataset
+    has_instance_boxes = hasattr(base_test_dataset, "instances_after_eval_transform")
+    label_source = "sam_masks_from_box_prompts" if has_instance_boxes else "image_labels_fallback_no_instance_boxes"
+    if not has_instance_boxes:
+        print(
+            "[sam_fiber] WARNING: dataset has no instance boxes; SAM patch labels will use image-level fallback labels.",
+            flush=True,
+        )
     total_eval_images = len(full_test_dataset)
     sample_size = min(
         total_eval_images,
@@ -666,6 +684,7 @@ def run_sam_fiber_job(
         "multimask_output": bool(sam_cfg.multimask_output),
         "sparse_probe": bool(sam_cfg.sparse_probe),
         "sparse_probe_radius": sam_cfg.sparse_probe_radius,
+        "sparse_probe_neighbor_k": sam_cfg.sparse_probe_neighbor_k,
         "sparse_probe_auto_neighbor_k": sam_cfg.sparse_probe_auto_neighbor_k,
         "sparse_probe_auto_radius_quantile": sam_cfg.sparse_probe_auto_radius_quantile,
         "sparse_probe_min_patches": sam_cfg.sparse_probe_min_patches,
@@ -677,10 +696,14 @@ def run_sam_fiber_job(
         "sparse_probe_iht_steps": sam_cfg.sparse_probe_iht_steps,
         "sparse_probe_iht_lr": sam_cfg.sparse_probe_iht_lr,
         "sparse_probe_heatmap_images": sam_cfg.sparse_probe_heatmap_images,
+        "sparse_probe_log_summary_plot": sam_cfg.sparse_probe_log_summary_plot,
+        "sparse_probe_volume_curve": sam_cfg.sparse_probe_volume_curve,
+        "sparse_probe_volume_curve_volumes": sam_cfg.sparse_probe_volume_curve_volumes,
         "subset_test": subset_test,
         "batch_size_test": batch_size_test,
         "seed": seed,
         "device": str(device),
+        "label_source": label_source,
     }
 
     wandb = init_wandb_run(
@@ -756,6 +779,7 @@ def run_sam_fiber_job(
                     "epoch": int(epoch),
                     "num_tokens": int(embeddings.shape[0]),
                     "num_images": int(torch.unique(image_ids).numel()),
+                    "label_source": label_source,
                 }
             )
             print(f"[sam_fiber] Epoch {epoch:03d}: running fiber analysis...", flush=True)
@@ -782,6 +806,7 @@ def run_sam_fiber_job(
                 neighborhood_size=int(sam_cfg.neighborhood_size or (sam_cfg.analysis_patch_size + 1)),
                 sparse_probe=bool(sam_cfg.sparse_probe),
                 sparse_probe_radius=sam_cfg.sparse_probe_radius,
+                sparse_probe_neighbor_k=sam_cfg.sparse_probe_neighbor_k,
                 sparse_probe_auto_neighbor_k=sam_cfg.sparse_probe_auto_neighbor_k,
                 sparse_probe_auto_radius_quantile=sam_cfg.sparse_probe_auto_radius_quantile,
                 sparse_probe_min_patches=sam_cfg.sparse_probe_min_patches,
@@ -793,6 +818,9 @@ def run_sam_fiber_job(
                 sparse_probe_iht_steps=sam_cfg.sparse_probe_iht_steps,
                 sparse_probe_iht_lr=sam_cfg.sparse_probe_iht_lr,
                 sparse_probe_heatmap_images=sam_cfg.sparse_probe_heatmap_images,
+                sparse_probe_log_summary_plot=sam_cfg.sparse_probe_log_summary_plot,
+                sparse_probe_volume_curve=sam_cfg.sparse_probe_volume_curve,
+                sparse_probe_volume_curve_volumes=sam_cfg.sparse_probe_volume_curve_volumes,
                 wandb_module=wandb,
             )
             fiber_history.append(analysis["fiber_summary"])
@@ -829,10 +857,11 @@ def run_sam_fiber_job(
                     overlay_images.append(overlay)
                     overlay_payload.append((overlay_path, row["description"]))
                 if overlay_images:
-                    grid = _make_image_grid(overlay_images, cols=min(3, len(overlay_images)))
+                    grid = _make_image_grid(overlay_images[: int(sam_cfg.mask_preview_images)], cols=4)
                     if grid is not None:
                         grid_path = analysis_dir / f"epoch_{epoch:03d}_sam_box_masks.png"
                         grid.save(grid_path)
+                        grid.save(grid_path.with_suffix(".pdf"))
                         mask_preview_paths.append(grid_path.name)
                         if wandb is not None:
                             segmentation_caption = _segmentation_epoch_caption(

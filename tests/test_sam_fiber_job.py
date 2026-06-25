@@ -147,13 +147,13 @@ class TestSamFiberHelpers(unittest.TestCase):
             show_progress=False,
         )
 
-        self.assertEqual(embeddings.shape, (6, 2))
-        self.assertEqual(patch_labels.shape, (6, 3))
-        self.assertEqual(images.shape[0], 2)
-        self.assertEqual(bboxes.shape, (6, 4))
-        self.assertEqual(patch_indices.tolist(), [0, 1, 2, 3, 0, 1])
-        self.assertEqual(image_ids.tolist(), [0, 0, 0, 0, 1, 1])
-        self.assertEqual(pred_labels.tolist(), [1, 1, 1, 1, 2, 2])
+        self.assertEqual(embeddings.shape, (4, 2))
+        self.assertEqual(patch_labels.shape, (4, 3))
+        self.assertEqual(images.shape[0], 1)
+        self.assertEqual(bboxes.shape, (4, 4))
+        self.assertEqual(patch_indices.tolist(), [0, 1, 2, 3])
+        self.assertEqual(image_ids.tolist(), [0, 0, 0, 0])
+        self.assertEqual(pred_labels.tolist(), [1, 1, 1, 1])
         self.assertEqual(previews, [])
 
 

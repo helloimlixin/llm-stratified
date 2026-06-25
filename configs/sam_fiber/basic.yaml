@@ -14,10 +14,11 @@ neighborhood_size: null
 progress: true
 mask_threshold: 0.25
 max_boxes_per_image: 16
-mask_preview_images: 12
+mask_preview_images: 16
 multimask_output: false
 sparse_probe: true
 sparse_probe_radius: null
+sparse_probe_neighbor_k: 32
 sparse_probe_auto_neighbor_k: 32
 sparse_probe_auto_radius_quantile: 0.5
 sparse_probe_min_patches: 12
@@ -28,6 +29,9 @@ sparse_probe_max_sparsity: 16
 sparse_probe_algorithm: omp
 sparse_probe_iht_steps: 80
 sparse_probe_iht_lr: null
-sparse_probe_heatmap_images: 8
+sparse_probe_heatmap_images: 16
+sparse_probe_log_summary_plot: false
+sparse_probe_volume_curve: true
+sparse_probe_volume_curve_volumes: [8, 16, 32, 64, 128, 256, 512]
 embedding_animation: true
 embedding_animation_fps: 1

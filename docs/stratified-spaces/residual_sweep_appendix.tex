@@ -1,0 +1,120 @@
+\section{Residual-Threshold Sweep Visualizations}
+\label{app:residual-sweep-visualizations}
+
+This appendix gives the complete visual output for the high-capacity fixed-$k=128$ sparse dictionary residual-threshold sweep. The main text uses $\tau=0.30$ because it preserves regional contrast while avoiding the overly permissive look of very loose residual targets. Here we include every threshold used in the DINOv3-H+/SAM-H sweep, together with the detailed probe dashboard for each model and threshold. All residual-sweep models use 128 local PCA dictionary atoms with maximum OMP sparsity 64. We also include the corresponding SigLIP2-B/AIMv2-L sweep summaries and their $\tau=0.30$ paper-facing heatmaps.
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{\figroot/coco_dinov3_huge_hicap_residual_sweep}
+  \caption{DINOv3-H+}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.49\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{\figroot/coco_sam_hicap_residual_sweep}
+  \caption{SAM-H}
+\end{subfigure}
+\caption{Per-model residual-threshold sweep summaries. Each panel tracks mean and median required sparsity, the 10--90\% band, the fraction of individual patch reconstructions that hit the sparsity cap, and the residual hit rate as the OMP target is relaxed.}
+\label{fig:app-residual-sweep-model-summaries}
+\end{figure}
+
+\newcommand{\residualheatmapfig}[5]{
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/#3}
+\caption{#1 sparse-complexity heatmaps at residual target $\tau=#2$. Each panel projects the mean required OMP sparsity for fixed-$k=128$ token neighborhoods back to a $4\times4$ \dataset{COCO} image grid. #4}
+\label{#5}
+\end{figure}
+}
+
+\newcommand{\residualprobefig}[5]{
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth,height=0.78\textheight,keepaspectratio]{\figroot/#3}
+\caption{#1 detailed sparse-dictionary probe dashboard at residual target $\tau=#2$. The dashboard summarizes the token-level required sparsity distribution, residual-threshold hit behavior, correlations with local geometry diagnostics, and representative high-complexity patch neighborhoods. #4}
+\label{#5}
+\end{figure}
+}
+
+\subsection{Residual Target tau=0.15}
+\residualheatmapfig{DINOv3-H+}{0.15}{coco_dinov3_huge_hicap_tau_0p15_sparse_dictionary_heatmaps}{This strict target remains mostly below the 64-atom cap, but many regions still need several dozen local atoms.}{fig:app-dino-tau015-heatmap}
+\residualheatmapfig{SAM-H}{0.15}{coco_sam_hicap_tau_0p15_sparse_dictionary_heatmaps}{This strict target is now mostly free of cap saturation, showing that SAM neighborhoods remain genuinely demanding even with a larger dictionary.}{fig:app-sam-tau015-heatmap}
+\residualprobefig{DINOv3-H+}{0.15}{coco_dinov3_huge_hicap_tau_0p15_sparse_dictionary_probe}{The strict target is useful as a stress test for local raw-patch reconstruction.}{fig:app-dino-tau015-probe}
+\residualprobefig{SAM-H}{0.15}{coco_sam_hicap_tau_0p15_sparse_dictionary_probe}{The cap-hit statistics show that the high-capacity setting removes most artificial saturation.}{fig:app-sam-tau015-probe}
+
+\clearpage
+\subsection{Residual Target tau=0.20}
+\residualheatmapfig{DINOv3-H+}{0.20}{coco_dinov3_huge_hicap_tau_0p20_sparse_dictionary_heatmaps}{The regional pattern remains similar to $\tau=0.15$, while the required atom counts decrease.}{fig:app-dino-tau020-heatmap}
+\residualheatmapfig{SAM-H}{0.20}{coco_sam_hicap_tau_0p20_sparse_dictionary_heatmaps}{SAM still needs many atoms in visually complex regions, but cap hits are rare.}{fig:app-sam-tau020-heatmap}
+\residualprobefig{DINOv3-H+}{0.20}{coco_dinov3_huge_hicap_tau_0p20_sparse_dictionary_probe}{The diagnostic panel shows the same geometry/sparsity relationship under a less strict residual target.}{fig:app-dino-tau020-probe}
+\residualprobefig{SAM-H}{0.20}{coco_sam_hicap_tau_0p20_sparse_dictionary_probe}{The hit-rate and cap-share curves improve relative to $\tau=0.15$.}{fig:app-sam-tau020-probe}
+
+\clearpage
+\subsection{Residual Target tau=0.25}
+\residualheatmapfig{DINOv3-H+}{0.25}{coco_dinov3_huge_hicap_tau_0p25_sparse_dictionary_heatmaps}{DINO keeps visible regional variation without cap effects.}{fig:app-dino-tau025-heatmap}
+\residualheatmapfig{SAM-H}{0.25}{coco_sam_hicap_tau_0p25_sparse_dictionary_heatmaps}{SAM shows clear regional differences with essentially no cap-limited neighborhoods.}{fig:app-sam-tau025-heatmap}
+\residualprobefig{DINOv3-H+}{0.25}{coco_dinov3_huge_hicap_tau_0p25_sparse_dictionary_probe}{The q10--q90 band remains broad enough to distinguish easier and harder neighborhoods.}{fig:app-dino-tau025-probe}
+\residualprobefig{SAM-H}{0.25}{coco_sam_hicap_tau_0p25_sparse_dictionary_probe}{The dashboard illustrates the transition from strict-target stress test toward interpretable regional contrast.}{fig:app-sam-tau025-probe}
+
+\clearpage
+\subsection{Residual Target tau=0.30}
+\residualheatmapfig{DINOv3-H+}{0.30}{coco_dinov3_huge_hicap_tau_0p30_sparse_dictionary_heatmaps}{This is the DINO threshold used for the main sparse-complexity heatmap because it gives readable contrast without cap saturation.}{fig:app-dino-tau030-heatmap}
+\residualheatmapfig{SAM-H}{0.30}{coco_sam_hicap_tau_0p30_sparse_dictionary_heatmaps}{This is the SAM threshold used for the main sparse-complexity heatmap because regional differences remain visible with no cap saturation.}{fig:app-sam-tau030-heatmap}
+\residualprobefig{DINOv3-H+}{0.30}{coco_dinov3_huge_hicap_tau_0p30_sparse_dictionary_probe}{The dashboard corresponds to the main-paper DINO sparse heatmap.}{fig:app-dino-tau030-probe}
+\residualprobefig{SAM-H}{0.30}{coco_sam_hicap_tau_0p30_sparse_dictionary_probe}{The dashboard corresponds to the main-paper SAM sparse heatmap.}{fig:app-sam-tau030-probe}
+
+\clearpage
+\subsection{Residual Target tau=0.35}
+\residualheatmapfig{DINOv3-H+}{0.35}{coco_dinov3_huge_hicap_tau_0p35_sparse_dictionary_heatmaps}{Relaxing the target further lowers the required atom counts, while the easiest and hardest regions remain visually distinguishable.}{fig:app-dino-tau035-heatmap}
+\residualheatmapfig{SAM-H}{0.35}{coco_sam_hicap_tau_0p35_sparse_dictionary_heatmaps}{SAM has no cap saturation at this target, so the map primarily reflects relative local reconstruction burden.}{fig:app-sam-tau035-heatmap}
+\residualprobefig{DINOv3-H+}{0.35}{coco_dinov3_huge_hicap_tau_0p35_sparse_dictionary_probe}{The diagnostic panel shows how the sparsity distribution continues to shift downward.}{fig:app-dino-tau035-probe}
+\residualprobefig{SAM-H}{0.35}{coco_sam_hicap_tau_0p35_sparse_dictionary_probe}{The diagnostic panel shows cap-free sparse-complexity contrast.}{fig:app-sam-tau035-probe}
+
+\clearpage
+\subsection{Residual Target tau=0.40}
+\residualheatmapfig{DINOv3-H+}{0.40}{coco_dinov3_huge_hicap_tau_0p40_sparse_dictionary_heatmaps}{This most relaxed target gives the lowest sparsity counts in the sweep and serves as a high-tolerance comparison.}{fig:app-dino-tau040-heatmap}
+\residualheatmapfig{SAM-H}{0.40}{coco_sam_hicap_tau_0p40_sparse_dictionary_heatmaps}{SAM is cap-free at this target, and remaining contrast reflects coarser local reconstruction difficulty.}{fig:app-sam-tau040-heatmap}
+\residualprobefig{DINOv3-H+}{0.40}{coco_dinov3_huge_hicap_tau_0p40_sparse_dictionary_probe}{The dashboard completes the DINO residual-threshold sweep.}{fig:app-dino-tau040-probe}
+\residualprobefig{SAM-H}{0.40}{coco_sam_hicap_tau_0p40_sparse_dictionary_probe}{The dashboard completes the SAM residual-threshold sweep.}{fig:app-sam-tau040-probe}
+
+\clearpage
+
+\subsection{Additional Vision Encoders}
+\begin{figure}[H]
+\centering
+\widepaperfig{\figroot/coco_vision_expansion_residual_sweep_comparison}
+\caption{SigLIP2-B and AIMv2-L residual-threshold sweep comparison. Both use fixed $k=128$ neighborhoods, 128 local PCA atoms, OMP cap 64, and the same threshold grid as the DINOv3/SAM sweep.}
+\label{fig:app-vision-expansion-residual-sweep}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_siglip2_base_tau_0p30_sparse_dictionary_heatmaps}
+\caption{SigLIP2-B sparse-complexity heatmaps at the main-paper residual target $\tau=0.30$.}
+\label{fig:app-siglip-tau030-heatmap}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth,height=0.78\textheight,keepaspectratio]{\figroot/coco_siglip2_base_tau_0p30_sparse_dictionary_probe}
+\caption{SigLIP2-B detailed sparse-dictionary probe dashboard at $\tau=0.30$.}
+\label{fig:app-siglip-tau030-probe}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/coco_aimv2_large_tau_0p30_sparse_dictionary_heatmaps}
+\caption{AIMv2-L sparse-complexity heatmaps at the main-paper residual target $\tau=0.30$.}
+\label{fig:app-aimv2-tau030-heatmap}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\linewidth,height=0.78\textheight,keepaspectratio]{\figroot/coco_aimv2_large_tau_0p30_sparse_dictionary_probe}
+\caption{AIMv2-L detailed sparse-dictionary probe dashboard at $\tau=0.30$.}
+\label{fig:app-aimv2-tau030-probe}
+\end{figure}
+
+\clearpage

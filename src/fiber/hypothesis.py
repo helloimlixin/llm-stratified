@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 
+from fiber.geometry import min_change_pvalue, min_fiber_violation_pvalue
+
 
 def _pairwise_distance_matrix(points: np.ndarray) -> np.ndarray:
     pts = np.asarray(points, dtype=np.float64)
@@ -23,9 +25,7 @@ def _first_dimension(res: Dict[str, Any] | None) -> float:
 
 
 def _min_pvalue(res: Dict[str, Any] | None) -> float:
-    if res and res.get("pvalues"):
-        return float(min(res["pvalues"]))
-    return float("nan")
+    return min_change_pvalue(res)
 
 
 def _finite_mean(values: np.ndarray | List[float]) -> float:
@@ -86,6 +86,8 @@ def summarize_hypothesis_metrics(
         "image_mean_dim_std": float("nan"),
         "image_mean_dim_cv": float("nan"),
         "image_internal_dim_std_mean": float("nan"),
+        "change_point_ratio": float("nan"),
+        "fiber_violation_ratio": float("nan"),
         "regular_token_ratio": float("nan"),
         "same_image_fiber_score": float("nan"),
         "local_chart_score": float("nan"),
@@ -100,6 +102,10 @@ def summarize_hypothesis_metrics(
 
     dims = np.asarray([_first_dimension(res) for res in fiber_results[:n]], dtype=np.float64)
     min_pvals = np.asarray([_min_pvalue(res) for res in fiber_results[:n]], dtype=np.float64)
+    violation_pvals = np.asarray(
+        [min_fiber_violation_pvalue(res) for res in fiber_results[:n]],
+        dtype=np.float64,
+    )
     strata_counts = np.asarray(
         [len(res.get("dimensions", [])) if res else 0 for res in fiber_results[:n]],
         dtype=np.int64,
@@ -180,7 +186,16 @@ def summarize_hypothesis_metrics(
         else float("nan")
     )
     image_internal_dim_std_mean = _finite_mean(image_internal_dim_stds)
-    irregular_token_ratio = float(np.mean(min_pvals < alpha)) if min_pvals.size else float("nan")
+    valid_change = np.isfinite(min_pvals)
+    valid_violation = np.isfinite(violation_pvals)
+    change_point_ratio = (
+        float(np.mean(valid_change & (min_pvals < alpha))) if min_pvals.size else float("nan")
+    )
+    irregular_token_ratio = (
+        float(np.mean(valid_violation & (violation_pvals < alpha)))
+        if violation_pvals.size
+        else float("nan")
+    )
     regular_token_ratio = 1.0 - irregular_token_ratio if math.isfinite(irregular_token_ratio) else float("nan")
 
     same_image_fiber_score = _clip01(
@@ -251,6 +266,8 @@ def summarize_hypothesis_metrics(
         "image_mean_dim_std": image_mean_dim_std,
         "image_mean_dim_cv": float(image_mean_dim_cv) if math.isfinite(image_mean_dim_cv) else float("nan"),
         "image_internal_dim_std_mean": image_internal_dim_std_mean,
+        "change_point_ratio": change_point_ratio,
+        "fiber_violation_ratio": irregular_token_ratio,
         "regular_token_ratio": regular_token_ratio,
         "same_image_fiber_score": same_image_fiber_score,
         "local_chart_score": local_chart_score,

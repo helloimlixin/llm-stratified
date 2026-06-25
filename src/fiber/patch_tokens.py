@@ -86,6 +86,7 @@ def collect_patch_tokens(
     pred_labels: list[torch.Tensor] = []
     collected = 0
     image_count = 0  # number of unique images stored
+    stop_collection = False
 
     iterator = (
         tqdm(loader, desc="Collect val tokens", leave=False)
@@ -95,7 +96,7 @@ def collect_patch_tokens(
 
     with torch.no_grad():
         for batch in iterator:
-            if max_tokens is not None and collected >= max_tokens:
+            if stop_collection or (max_tokens is not None and collected >= max_tokens):
                 break
             imgs, lbls = batch[0].to(device), batch[1]
             idxs = batch[2] if len(batch) > 2 else None
@@ -106,7 +107,7 @@ def collect_patch_tokens(
                 else model.head(feats[:, 0])
             )
             preds = logits.argmax(dim=-1).cpu()
-            start_idx = 2 if getattr(model, "has_dist_token", False) else 1
+            start_idx = int(getattr(model, "num_prefix_tokens", 2 if getattr(model, "has_dist_token", False) else 1))
             patch_tokens = feats[:, start_idx:, :].cpu()
             B, P, E = patch_tokens.shape
             grid = int(math.sqrt(P))
@@ -153,24 +154,28 @@ def collect_patch_tokens(
             for i in range(B):
                 if max_tokens is not None and collected >= max_tokens:
                     break
+                if max_tokens is not None and collected + P > max_tokens:
+                    stop_collection = True
+                    break
                 # Store this image once
                 img_idx = image_count
                 unique_images.append(imgs[i].cpu())
                 image_count += 1
 
-                remain = (max_tokens - collected) if max_tokens is not None else P
-                take = min(P, remain)
-                embeddings.append(patch_tokens[i, :take].clone())
+                take = P
+                embeddings.append(patch_tokens[i].clone())
                 if patch_labels_per_image:
-                    labels.append(patch_labels_per_image[i][:take])
+                    labels.append(patch_labels_per_image[i])
                 else:
                     lbl_i = lbls[i].cpu()
                     labels.append(lbl_i.unsqueeze(0).expand(take, *lbl_i.shape))
-                image_ids.append(torch.full((take,), img_idx, dtype=torch.int32))
-                bboxes.append(all_bboxes[:take])
-                patch_indices.append(all_patch_idx[:take])
+                image_ids.append(torch.full((P,), img_idx, dtype=torch.int32))
+                bboxes.append(all_bboxes)
+                patch_indices.append(all_patch_idx)
                 pred_labels.append(preds[i].expand(take))
                 collected += take
+            if stop_collection:
+                break
 
     if not embeddings:
         return (
