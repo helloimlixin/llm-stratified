@@ -82,6 +82,7 @@ plots/
 *.pkl
 results.json
 embeddings/
+external/VAR/
 
 # Testing
 .coverage
@@ -91,6 +92,16 @@ htmlcov/
 
 # Documentation
 docs/_build/
+docs/**/*.aux
+docs/**/*.bbl
+docs/**/*.blg
+docs/**/*.fdb_latexmk
+docs/**/*.fls
+docs/**/*.log
+docs/**/*.out
+docs/**/*.synctex.gz
+docs/**/*.pdf
+docs/stratified-spaces/imgs/
 
 # Temporary files
 *.tmp
