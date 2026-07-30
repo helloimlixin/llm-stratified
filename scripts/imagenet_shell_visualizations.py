@@ -21,6 +21,19 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+try:
+    from radial_shell_statistics import (
+        calibrate_fitted_shell_deviance,
+        fitted_shell_test_from_distances,
+        monte_carlo_pvalue,
+    )
+except ImportError:  # Imported as scripts.imagenet_shell_visualizations.
+    from scripts.radial_shell_statistics import (
+        calibrate_fitted_shell_deviance,
+        fitted_shell_test_from_distances,
+        monte_carlo_pvalue,
+    )
+
 
 def fit_radial_dimension(distances: np.ndarray, outer_radius: float | None = None) -> float:
     """MLE for F(s)=(s/r)^d using distances within a fixed outer radius."""
@@ -64,41 +77,6 @@ def kl_to_uniform(counts: np.ndarray) -> float:
     with np.errstate(divide="ignore", invalid="ignore"):
         terms = np.where(q > 0.0, q * (np.log(q) + math.log(bins)), 0.0)
     return float(np.sum(terms))
-
-
-EXPONENTIAL_AD_CRITICALS = {
-    0.15: 0.922,
-    0.10: 1.078,
-    0.05: 1.341,
-    0.025: 1.606,
-    0.01: 1.957,
-}
-
-
-def exponential_ad_critical(samples: int, alpha: float = 0.05) -> float:
-    """Finite-sample critical value for exponentiality with fitted scale."""
-    if int(samples) < 2:
-        return float("nan")
-    if float(alpha) not in EXPONENTIAL_AD_CRITICALS:
-        raise ValueError(f"alpha must be one of {sorted(EXPONENTIAL_AD_CRITICALS)}")
-    return float(EXPONENTIAL_AD_CRITICALS[float(alpha)] / (1.0 + 0.6 / int(samples)))
-
-
-def exponential_ad_statistic(distances: np.ndarray, radius: float) -> float:
-    """Anderson-Darling statistic for log-radius exponentiality."""
-    values = np.asarray(distances, dtype=np.float64)
-    values = values[np.isfinite(values) & (values > 0.0) & (values < float(radius))]
-    if values.size < 2 or radius <= 0.0:
-        return float("nan")
-    log_radii = np.log(float(radius) / values)
-    scale = float(np.mean(log_radii))
-    if not math.isfinite(scale) or scale <= 0.0:
-        return float("nan")
-    standardized = np.sort(log_radii / scale)
-    cdf = np.clip(1.0 - np.exp(-standardized), 1e-12, 1.0 - 1e-12)
-    weights = 2.0 * np.arange(1, values.size + 1, dtype=np.float64) - 1.0
-    terms = weights * (np.log(cdf) + np.log1p(-cdf[::-1]))
-    return float(-values.size - np.sum(terms) / values.size)
 
 
 def read_label_rows(labels_csv: Path, limit: int) -> list[dict[str, str]]:
@@ -150,6 +128,8 @@ def run_shell_tests(
     neighbors: int,
     bins: int,
     alpha: float,
+    calibration_trials: int,
+    calibration_seed: int,
 ) -> list[dict[str, Any]]:
     mean = features.mean(axis=0, keepdims=True)
     std = features.std(axis=0, keepdims=True)
@@ -162,22 +142,29 @@ def run_shell_tests(
     order = np.argsort(nn_dists, axis=1)
     nn_idx = np.take_along_axis(nn_idx, order, axis=1)
     nn_dists = np.take_along_axis(nn_dists, order, axis=1)
+    tested = int(k) - 1
+    critical, null_statistics = calibrate_fitted_shell_deviance(
+        samples=tested,
+        bins=int(bins),
+        alpha=float(alpha),
+        trials=int(calibration_trials),
+        seed=int(calibration_seed),
+    )
     records: list[dict[str, Any]] = []
     for anchor in range(n):
         local = nn_dists[anchor]
         radius = float(local[-1])
         inner = local[:-1]
         dim_hat = fit_radial_dimension(inner, radius)
-        critical = exponential_ad_critical(inner.size, float(alpha))
         if not math.isfinite(dim_hat) or dim_hat <= 0.0:
             counts = np.zeros(int(bins), dtype=np.int64)
             stat = float("nan")
             score = float("nan")
+            pvalue = float("nan")
         else:
-            edges = equal_mass_edges(dim_hat, int(bins), radius)
-            counts = shell_counts(inner, edges)
-            stat = exponential_ad_statistic(inner, radius)
+            counts, stat = fitted_shell_test_from_distances(inner, radius=radius, bins=int(bins))
             score = float(stat / critical) if math.isfinite(stat) and critical > 0.0 else float("nan")
+            pvalue = monte_carlo_pvalue(stat, null_statistics)
         records.append(
             {
                 "anchor": int(anchor),
@@ -186,12 +173,14 @@ def run_shell_tests(
                 "radius": radius,
                 "dimension_hat": dim_hat,
                 "shell_counts": counts.astype(int).tolist(),
-                "ad_statistic": stat,
-                "ad_critical": critical,
-                "ad_score": score,
-                "reject": bool(math.isfinite(score) and score > 1.0),
+                "shell_lrt_statistic": stat,
+                "shell_lrt_critical": critical,
+                "shell_lrt_score": score,
+                "shell_lrt_pvalue": pvalue,
+                "reject": bool(math.isfinite(pvalue) and pvalue <= float(alpha)),
                 "neighbors": int(inner.size),
                 "bins": int(bins),
+                "calibration_trials": int(calibration_trials),
             }
         )
     return records
@@ -218,7 +207,7 @@ def image_scores(records: list[dict[str, Any]], *, image_index: int, patches_per
     stop = start + int(patches_per_image)
     values = []
     for row in records[start:stop]:
-        score = float(row.get("ad_score", float("nan")))
+        score = float(row.get("shell_lrt_score", float("nan")))
         values.append(score if math.isfinite(score) else 0.0)
     grid = int(math.sqrt(patches_per_image))
     return np.asarray(values, dtype=np.float64).reshape(grid, grid)
@@ -289,7 +278,7 @@ def make_heatmap_gallery(
         reject_count = int(np.sum(scores > 1.0))
         draw_label(draw, (x + 4, y + 6), f"{idx}: {label} | rejects {reject_count}/{patches_per_image}", font=font)
         draw_label(draw, (x + 4, y + image_size + 13), "input", font=font)
-        draw_label(draw, (x + image_size + 16, y + image_size + 13), "AD ratio overlay", font=font)
+        draw_label(draw, (x + image_size + 16, y + image_size + 13), "shell deviance ratio", font=font)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path)
 
@@ -327,8 +316,8 @@ def make_anchor_examples(
     max_per_image: int,
 ) -> None:
     candidates = sorted(
-        [row for row in records if math.isfinite(float(row.get("ad_score", float("nan"))))],
-        key=lambda row: float(row["ad_score"]),
+        [row for row in records if math.isfinite(float(row.get("shell_lrt_score", float("nan"))))],
+        key=lambda row: float(row["shell_lrt_score"]),
         reverse=True,
     )
     image_size = images[0].size[0]
@@ -377,8 +366,9 @@ def make_anchor_examples(
         canvas.paste(thumb, (10, y + 24))
         draw = ImageDraw.Draw(canvas)
         label = labels[image_idx].replace("_", " ")
-        score = float(row["ad_score"])
-        draw.text((10, y + 5), f"{ridx + 1}. {label} | patch ({gx},{gy}) | AD ratio={score:.2f} | d={float(row['dimension_hat']):.2f}", fill=(20, 20, 20), font=font)
+        score = float(row["shell_lrt_score"])
+        pvalue = float(row["shell_lrt_pvalue"])
+        draw.text((10, y + 5), f"{ridx + 1}. {label} | patch ({gx},{gy}) | deviance ratio={score:.2f} | p={pvalue:.3g} | d={float(row['dimension_hat']):.2f}", fill=(20, 20, 20), font=font)
         patch = patches[anchor].resize((72, 72), Image.Resampling.NEAREST)
         canvas.paste(patch, (166, y + 50))
         draw.text((166, y + 30), "anchor crop", fill=(20, 20, 20), font=small_font)
@@ -396,11 +386,119 @@ def make_anchor_examples(
     canvas.save(out_path)
 
 
+def make_shell_lrt_dashboard(
+    *,
+    records: list[dict[str, Any]],
+    labels: list[str],
+    patches_per_image: int,
+    out_path: Path,
+) -> None:
+    scores = np.asarray([float(row["shell_lrt_score"]) for row in records], dtype=np.float64)
+    dimensions = np.asarray([float(row["dimension_hat"]) for row in records], dtype=np.float64)
+    rejected = np.asarray([bool(row["reject"]) for row in records], dtype=bool)
+    counts = np.asarray([row["shell_counts"] for row in records], dtype=np.float64)
+    expected = np.asarray([float(row["neighbors"]) / counts.shape[1] for row in records])[:, None]
+    residuals = counts / expected - 1.0
+    image_rates = rejected.reshape(len(labels), int(patches_per_image)).mean(axis=1)
+
+    width, height = 1500, 900
+    canvas = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(canvas)
+    title_font = text_font(22)
+    panel_font = text_font(16)
+    small_font = text_font(11)
+    draw.text((38, 20), "ImageNet patch neighborhoods: shell likelihood-ratio diagnostics", fill=(18, 28, 36), font=title_font)
+
+    margin, gap, top = 40, 34, 72
+    panel_w = (width - 2 * margin - gap) // 2
+    panel_h = (height - top - margin - gap) // 2
+
+    def panel(row: int, col: int, title: str) -> tuple[int, int, int, int]:
+        x0 = margin + col * (panel_w + gap)
+        y0 = top + row * (panel_h + gap)
+        draw.text((x0, y0), title, fill=(18, 28, 36), font=panel_font)
+        box = (x0 + 48, y0 + 34, x0 + panel_w - 18, y0 + panel_h - 42)
+        draw.line((box[0], box[3], box[2], box[3]), fill=(55, 65, 72), width=2)
+        draw.line((box[0], box[1], box[0], box[3]), fill=(55, 65, 72), width=2)
+        return box
+
+    hist_box = panel(0, 0, "Normalized shell deviance")
+    finite_scores = scores[np.isfinite(scores)]
+    score_max = max(float(np.nanquantile(finite_scores, 0.995)), 1.05)
+    hist, edges = np.histogram(np.clip(finite_scores, 0.0, score_max), bins=52, range=(0.0, score_max))
+    hist_max = max(int(hist.max()), 1)
+    for idx, count in enumerate(hist):
+        bx0 = hist_box[0] + int(idx * (hist_box[2] - hist_box[0]) / hist.size)
+        bx1 = hist_box[0] + int((idx + 1) * (hist_box[2] - hist_box[0]) / hist.size) - 1
+        by0 = hist_box[3] - int(count / hist_max * (hist_box[3] - hist_box[1]))
+        draw.rectangle((bx0, by0, bx1, hist_box[3]), fill=(47, 111, 143))
+    threshold_x = hist_box[0] + int((hist_box[2] - hist_box[0]) / score_max)
+    draw.line((threshold_x, hist_box[1], threshold_x, hist_box[3]), fill=(193, 63, 63), width=3)
+    draw.text((hist_box[0], hist_box[3] + 9), "T / Monte Carlo critical value", fill=(70, 76, 80), font=small_font)
+    draw.text((threshold_x + 5, hist_box[1] + 5), "reject", fill=(193, 63, 63), font=small_font)
+
+    rate_box = panel(0, 1, "Rejection fraction by image")
+    order = np.argsort(image_rates)
+    bar_gap = 5
+    bar_w = max(8, (rate_box[2] - rate_box[0] - bar_gap * (len(labels) + 1)) // len(labels))
+    for rank, image_idx in enumerate(order):
+        x0 = rate_box[0] + bar_gap + rank * (bar_w + bar_gap)
+        y0 = rate_box[3] - int(image_rates[image_idx] * (rate_box[3] - rate_box[1]))
+        shade = int(80 + 140 * rank / max(len(labels) - 1, 1))
+        draw.rectangle((x0, y0, x0 + bar_w, rate_box[3]), fill=(45, shade, 125))
+        draw.text((x0, rate_box[3] + 5), str(image_idx), fill=(70, 76, 80), font=small_font)
+    alpha_y = rate_box[3] - int(0.05 * (rate_box[3] - rate_box[1]))
+    draw.line((rate_box[0], alpha_y, rate_box[2], alpha_y), fill=(193, 63, 63), width=2)
+    legend = "  ".join(f"{idx}:{labels[idx].replace('_', ' ')[:11]}" for idx in range(len(labels)))
+    draw.text((rate_box[0], rate_box[3] + 22), legend[:105], fill=(70, 76, 80), font=small_font)
+
+    scatter_box = panel(1, 0, "Dimension versus shell mismatch")
+    finite = np.isfinite(scores) & np.isfinite(dimensions)
+    x_values = dimensions[finite]
+    y_cap = max(float(np.nanquantile(scores[finite], 0.99)), 1.05)
+    y_values = np.clip(scores[finite], 0.0, y_cap)
+    x_min, x_max = float(x_values.min()), float(x_values.max())
+    for x_value, y_value, is_rejected in zip(x_values, y_values, rejected[finite]):
+        px = scatter_box[0] + int((x_value - x_min) / max(x_max - x_min, 1e-9) * (scatter_box[2] - scatter_box[0]))
+        py = scatter_box[3] - int(y_value / y_cap * (scatter_box[3] - scatter_box[1]))
+        color = (211, 72, 65) if is_rejected else (91, 163, 199)
+        draw.ellipse((px - 2, py - 2, px + 2, py + 2), fill=color)
+    reject_y = scatter_box[3] - int(1.0 / y_cap * (scatter_box[3] - scatter_box[1]))
+    draw.line((scatter_box[0], reject_y, scatter_box[2], reject_y), fill=(193, 63, 63), width=2)
+    draw.text((scatter_box[0], scatter_box[3] + 9), "fitted local dimension", fill=(70, 76, 80), font=small_font)
+
+    residual_box = panel(1, 1, "Shell-count residual profile")
+    mean_residual = np.nanmean(residuals, axis=0)
+    q10 = np.nanquantile(residuals, 0.10, axis=0)
+    q90 = np.nanquantile(residuals, 0.90, axis=0)
+    residual_min = min(float(q10.min()), 0.0)
+    residual_max = max(float(q90.max()), 0.0)
+    span = max(residual_max - residual_min, 1e-9)
+    zero_y = residual_box[3] - int((0.0 - residual_min) / span * (residual_box[3] - residual_box[1]))
+    draw.line((residual_box[0], zero_y, residual_box[2], zero_y), fill=(55, 65, 72), width=1)
+    points: list[tuple[int, int]] = []
+    for idx in range(counts.shape[1]):
+        px = residual_box[0] + int((idx + 0.5) / counts.shape[1] * (residual_box[2] - residual_box[0]))
+        y10 = residual_box[3] - int((q10[idx] - residual_min) / span * (residual_box[3] - residual_box[1]))
+        y90 = residual_box[3] - int((q90[idx] - residual_min) / span * (residual_box[3] - residual_box[1]))
+        py = residual_box[3] - int((mean_residual[idx] - residual_min) / span * (residual_box[3] - residual_box[1]))
+        draw.line((px, y90, px, y10), fill=(225, 181, 73), width=8)
+        draw.ellipse((px - 4, py - 4, px + 4, py + 4), fill=(126, 79, 0))
+        draw.text((px - 3, residual_box[3] + 7), str(idx + 1), fill=(70, 76, 80), font=small_font)
+        points.append((px, py))
+    if len(points) > 1:
+        draw.line(points, fill=(126, 79, 0), width=3)
+    draw.text((residual_box[0], residual_box[3] + 24), "equal-null-mass shell, inner to outer", fill=(70, 76, 80), font=small_font)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path)
+
+
 def write_report(path: Path, summary: dict[str, Any], paths: dict[str, str]) -> None:
     lines = [
         "# ImageNet Radial-Uniformity Visualization",
         "",
-        "Patch-level analytic exponentiality tests on actual ImageNet validation images.",
+        "Patch-level multinomial shell likelihood-ratio tests on actual ImageNet validation images.",
         "",
         "## Configuration",
         "",
@@ -421,8 +519,9 @@ def write_report(path: Path, summary: dict[str, Any], paths: dict[str, str]) -> 
             "## Summary",
             "",
             f"- Patches tested: `{summary['num_patches']}`",
-            f"- Rejected patches: `{summary['reject_count']}`",
-            f"- Rejection fraction: `{summary['reject_fraction']:.4f}`",
+            f"- Rejected patches: `{summary['shell_lrt_reject_count']}`",
+            f"- Rejection fraction: `{summary['shell_lrt_reject_fraction']:.4f}`",
+            f"- Monte Carlo critical deviance: `{summary['shell_lrt_critical']:.4f}`",
             f"- Mean fitted radial dimension: `{summary['mean_dimension_hat']:.4f}`",
             f"- Median fitted radial dimension: `{summary['median_dimension_hat']:.4f}`",
             "",
@@ -456,18 +555,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         neighbors=args.neighbors,
         bins=args.bins,
         alpha=args.alpha,
+        calibration_trials=args.calibration_trials,
+        calibration_seed=args.seed,
     )
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     heatmap_path = out_dir / "imagenet_shell_heatmap_gallery.png"
     examples_path = out_dir / "imagenet_shell_anchor_examples.png"
+    dashboard_path = out_dir / "imagenet_shell_lrt_dashboard.png"
     records_path = out_dir / "imagenet_shell_patch_records.json"
     summary_path = out_dir / "imagenet_shell_summary.json"
     report_path = out_dir / "imagenet_shell_report.md"
 
     make_heatmap_gallery(
-        images=images,
-        labels=labels,
+        images=images[: args.gallery_images],
+        labels=labels[: args.gallery_images],
         records=records,
         out_path=heatmap_path,
         patch_size=args.patch_size,
@@ -484,10 +586,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         count=args.examples,
         max_per_image=args.example_max_per_image,
     )
+    patches_per_image = (int(args.image_size) // int(args.patch_size)) ** 2
+    make_shell_lrt_dashboard(
+        records=records,
+        labels=labels,
+        patches_per_image=patches_per_image,
+        out_path=dashboard_path,
+    )
     dims = np.asarray([float(row["dimension_hat"]) for row in records], dtype=np.float64)
-    statistics = np.asarray([float(row["ad_statistic"]) for row in records], dtype=np.float64)
-    scores = np.asarray([float(row["ad_score"]) for row in records], dtype=np.float64)
-    reject = np.isfinite(scores) & (scores > 1.0)
+    statistics = np.asarray([float(row["shell_lrt_statistic"]) for row in records], dtype=np.float64)
+    scores = np.asarray([float(row["shell_lrt_score"]) for row in records], dtype=np.float64)
+    reject = np.asarray([bool(row["reject"]) for row in records], dtype=bool)
     summary = {
         "image_count": int(len(images)),
         "image_size": int(args.image_size),
@@ -496,24 +605,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "neighbors": int(min(args.neighbors, features.shape[0] - 1)),
         "bins": int(args.bins),
         "alpha": float(args.alpha),
+        "calibration_trials": int(args.calibration_trials),
+        "calibration_seed": int(args.seed),
         "num_patches": int(features.shape[0]),
-        "reject_count": int(np.sum(reject)),
-        "reject_fraction": float(np.mean(reject)),
+        "shell_lrt_reject_count": int(np.sum(reject)),
+        "shell_lrt_reject_fraction": float(np.mean(reject)),
         "mean_dimension_hat": float(np.nanmean(dims)),
         "median_dimension_hat": float(np.nanmedian(dims)),
-        "ad_statistic_quantiles": {
+        "shell_lrt_statistic_quantiles": {
             "q50": float(np.nanquantile(statistics, 0.50)),
             "q90": float(np.nanquantile(statistics, 0.90)),
             "q95": float(np.nanquantile(statistics, 0.95)),
             "q99": float(np.nanquantile(statistics, 0.99)),
         },
-        "ad_critical": exponential_ad_critical(int(min(args.neighbors, features.shape[0] - 1)) - 1, float(args.alpha)),
+        "shell_lrt_score_quantiles": {
+            "q50": float(np.nanquantile(scores, 0.50)),
+            "q90": float(np.nanquantile(scores, 0.90)),
+            "q95": float(np.nanquantile(scores, 0.95)),
+            "q99": float(np.nanquantile(scores, 0.99)),
+        },
+        "shell_lrt_critical": float(records[0]["shell_lrt_critical"]),
         "classes": labels,
     }
     records_path.write_text(json.dumps(records, indent=2), encoding="utf-8")
     paths = {
         "heatmap_gallery": str(heatmap_path),
         "anchor_examples": str(examples_path),
+        "dashboard": str(dashboard_path),
         "records_json": str(records_path),
         "summary_json": str(summary_path),
         "report_md": str(report_path),
@@ -537,9 +655,12 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbors", type=int, default=96)
     parser.add_argument("--bins", type=int, default=8)
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--calibration-trials", type=int, default=50000)
+    parser.add_argument("--seed", type=int, default=20260730)
     parser.add_argument("--score-cap", type=float, default=4.0)
     parser.add_argument("--columns", type=int, default=2)
-    parser.add_argument("--examples", type=int, default=8)
+    parser.add_argument("--gallery-images", type=int, default=6)
+    parser.add_argument("--examples", type=int, default=4)
     parser.add_argument("--example-max-per-image", type=int, default=1)
     return parser
 

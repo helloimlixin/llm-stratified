@@ -1,26 +1,25 @@
 import unittest
 
-import numpy as np
-
-from scripts.radial_uniformity_hypothesis_experiment import (
-    exponential_ad_critical,
-    exponential_ad_rows,
-)
+from scripts.radial_uniformity_hypothesis_experiment import run_experiment
 
 
 class RadialUniformityExperimentTests(unittest.TestCase):
-    def test_exponential_quantile_grid_is_below_critical_value(self):
-        probabilities = (np.arange(1, 201, dtype=np.float64) - 0.5) / 200.0
-        values = -np.log1p(-probabilities)
-        statistic = float(exponential_ad_rows(values[None, :])[0])
-        self.assertLess(statistic, exponential_ad_critical(200))
+    def test_experiment_reports_shell_deviance_size_and_power(self):
+        result = run_experiment(
+            dimension=4.0,
+            bins=4,
+            sample_sizes=[64],
+            trials=500,
+            calibration_trials=1000,
+            alpha=0.05,
+            seed=23,
+        )
 
-    def test_nonexponential_shape_has_larger_statistic(self):
-        probabilities = (np.arange(1, 201, dtype=np.float64) - 0.5) / 200.0
-        exponential = -np.log1p(-probabilities)
-        curved = exponential**2
-        statistics = exponential_ad_rows(np.stack([exponential, curved]))
-        self.assertLess(float(statistics[0]), float(statistics[1]))
+        rows = {row["scenario"]: row for row in result["summary"]}
+        self.assertEqual(set(rows), {"null", "inner_heavy", "outer_heavy"})
+        self.assertLess(rows["null"]["rejection_rate"], 0.10)
+        self.assertGreater(rows["inner_heavy"]["rejection_rate"], rows["null"]["rejection_rate"])
+        self.assertGreater(rows["outer_heavy"]["rejection_rate"], rows["null"]["rejection_rate"])
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
-"""Run the analytic radial-shell test on a pretrained VAR visual-token pipeline.
+"""Run the calibrated radial-shell test on a pretrained VAR visual-token pipeline.
 
 The experiment has two linked parts:
 
-1. Test the normalized VAR VQ codebook with the fitted-scale exponential
-   Anderson-Darling statistic used in the paper.
+1. Test the normalized VAR VQ codebook with the fitted-dimension multinomial
+   shell likelihood-ratio statistic used in the paper.
 2. Teacher-force real ImageNet images and freshly generated VAR images, then
-   relate each target code's radial score to the generator's local branch
+   relate each target code's shell deviance to the generator's local branch
    flatness, entropy, likelihood, and confidence.
 
 VAR predicts visual token maps coarse-to-fine, so this is an architectural
@@ -46,9 +46,12 @@ from pretrained_var_generator import (  # noqa: E402
     save_grid,
 )
 from vq_gpt_shell_visualizations import (  # noqa: E402
-    exponential_ad_critical,
-    exponential_ad_statistic,
     fit_radial_dimension,
+)
+from radial_shell_statistics import (  # noqa: E402
+    calibrate_fitted_shell_deviance,
+    fitted_shell_test_from_distances,
+    monte_carlo_pvalue,
 )
 
 
@@ -228,27 +231,43 @@ def analyze_codebook(
     codebook: torch.Tensor,
     *,
     neighbors: int,
+    bins: int,
     alpha: float,
+    calibration_trials: int,
+    seed: int,
     device: torch.device,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     normalized = F.normalize(codebook.detach().float(), dim=1)
     distances = nearest_neighbor_distances(normalized.to(device), neighbors=int(neighbors))
     total = int(distances.shape[0])
     tested = int(neighbors) - 1
-    critical = exponential_ad_critical(tested, float(alpha))
+    critical, null_statistics = calibrate_fitted_shell_deviance(
+        samples=tested,
+        bins=int(bins),
+        alpha=float(alpha),
+        trials=int(calibration_trials),
+        seed=int(seed) + 900,
+    )
     dimensions = np.full(total, np.nan, dtype=np.float64)
     statistics = np.full(total, np.nan, dtype=np.float64)
     scores = np.full(total, np.nan, dtype=np.float64)
+    pvalues = np.full(total, np.nan, dtype=np.float64)
     radii = np.full(total, np.nan, dtype=np.float64)
+    shell_count_rows = np.zeros((total, int(bins)), dtype=np.int64)
     for code_id in range(total):
         local = distances[code_id]
         radius = float(local[-1])
         inner = local[:-1]
         dimensions[code_id] = fit_radial_dimension(inner, radius)
-        statistics[code_id] = exponential_ad_statistic(inner, radius)
+        shell_count_rows[code_id], statistics[code_id] = fitted_shell_test_from_distances(
+            inner,
+            radius=radius,
+            bins=int(bins),
+        )
         scores[code_id] = statistics[code_id] / critical
+        pvalues[code_id] = monte_carlo_pvalue(statistics[code_id], null_statistics)
         radii[code_id] = radius
-    rejected = np.isfinite(scores) & (scores > 1.0)
+    rejected = np.isfinite(pvalues) & (pvalues <= float(alpha))
     coords = normalized.cpu().numpy().astype(np.float64)
     centered = coords - coords.mean(axis=0, keepdims=True)
     _u, _s, vt = np.linalg.svd(centered, full_matrices=False)
@@ -259,14 +278,16 @@ def analyze_codebook(
         "normalization": "L2-normalized codebook vectors",
         "neighbors": int(neighbors),
         "tested_inner_radii": tested,
+        "bins": int(bins),
         "alpha": float(alpha),
-        "ad_critical": float(critical),
-        "reject_count": int(rejected.sum()),
-        "reject_fraction": float(rejected.mean()),
+        "calibration_trials": int(calibration_trials),
+        "shell_lrt_critical": float(critical),
+        "shell_lrt_reject_count": int(rejected.sum()),
+        "shell_lrt_reject_fraction": float(rejected.mean()),
         "mean_dimension_hat": _finite_mean(dimensions),
         "median_dimension_hat": float(np.nanmedian(dimensions)),
-        "median_ad_score": float(np.nanmedian(scores)),
-        "ad_score_quantiles": {
+        "median_shell_lrt_score": float(np.nanmedian(scores)),
+        "shell_lrt_score_quantiles": {
             "q50": float(np.nanquantile(scores, 0.50)),
             "q90": float(np.nanquantile(scores, 0.90)),
             "q95": float(np.nanquantile(scores, 0.95)),
@@ -278,8 +299,10 @@ def analyze_codebook(
         "dimensions": dimensions,
         "statistics": statistics,
         "scores": scores,
+        "pvalues": pvalues,
         "rejected": rejected,
         "radii": radii,
+        "shell_counts": shell_count_rows,
         "pca": pca,
         "normalized_codebook": normalized.cpu().numpy(),
     }
@@ -465,8 +488,8 @@ def summarize_positions(
         "num_positions": int(targets.size),
         "unique_target_codes": int(np.unique(targets).size),
         "target_rejected_code_fraction": float(code_rejected.mean()),
-        "mean_target_code_ad_score": _finite_mean(code_scores),
-        "median_target_code_ad_score": float(np.nanmedian(code_scores)),
+        "mean_target_code_shell_lrt_score": _finite_mean(code_scores),
+        "median_target_code_shell_lrt_score": float(np.nanmedian(code_scores)),
         "mean_target_code_dimension": _finite_mean(code_dimensions),
         "mean_branch_ks": _finite_mean(flattened["branch_ks"]),
         "mean_branch_entropy_norm": _finite_mean(flattened["branch_entropy_norm"]),
@@ -544,7 +567,7 @@ def write_heatmap_gallery(
                 vmin=0.0,
                 vmax=max(radial_max, 1.0),
             )
-            axes[row, base + 1].set_title("codebook AD ratio", fontsize=10)
+            axes[row, base + 1].set_title("shell-deviance ratio", fontsize=10)
             axes[row, base + 2].imshow(np.clip(image_np, 0.0, 1.0))
             entropy_mappable = axes[row, base + 2].imshow(
                 entropy,
@@ -588,23 +611,23 @@ def write_dashboard(
     axes[0, 0].hist(scores[np.isfinite(scores)], bins=55, color="#4c78a8", alpha=0.92)
     axes[0, 0].axvline(1.0, color="#d62728", linewidth=2)
     axes[0, 0].set_title("VAR codebook radial scores")
-    axes[0, 0].set_xlabel("AD statistic / 5% critical value")
+    axes[0, 0].set_xlabel("shell deviance / 5% Monte Carlo critical value")
     scatter = axes[0, 1].scatter(pca[:, 0], pca[:, 1], c=np.clip(scores, 0.0, 5.0), s=7, cmap="viridis", linewidths=0)
     axes[0, 1].set_title("Normalized VQ codebook PCA")
     axes[0, 1].set_xlabel("PC1")
     axes[0, 1].set_ylabel("PC2")
-    fig.colorbar(scatter, ax=axes[0, 1], fraction=0.046, pad=0.03, label="clipped AD ratio")
+    fig.colorbar(scatter, ax=axes[0, 1], fraction=0.046, pad=0.03, label="clipped shell-deviance ratio")
     axes[0, 2].hist(dims[np.isfinite(dims)], bins=50, color="#72b7b2", alpha=0.92)
     axes[0, 2].set_title("Fitted radial dimensions")
     axes[0, 2].set_xlabel("dimension estimate")
 
     pipeline_names = ["VAR"]
-    reject_rates = [float(codebook_summary["reject_fraction"])]
+    reject_rates = [float(codebook_summary["shell_lrt_reject_fraction"])]
     median_dims = [float(codebook_summary["median_dimension_hat"])]
     if llamagen_summary_path is not None and llamagen_summary_path.exists():
         llama = json.loads(llamagen_summary_path.read_text(encoding="utf-8"))["codebook_shell_test"]
         pipeline_names.insert(0, "LlamaGen")
-        reject_rates.insert(0, float(llama["reject_fraction"]))
+        reject_rates.insert(0, float(llama["shell_lrt_reject_fraction"]))
         median_dims.insert(0, float(llama["median_dimension_hat"]))
     x = np.arange(len(pipeline_names))
     width = 0.36
@@ -631,7 +654,7 @@ def write_dashboard(
     axes[1, 2].scatter(scores[~used], np.zeros((~used).sum()), s=5, alpha=0.18, color="#bab0ac", label="unused")
     axes[1, 2].scatter(scores[used], np.log1p(counts[used]), s=10, alpha=0.65, c=np.where(rejected[used], "#e45756", "#4c78a8"), label="used")
     axes[1, 2].axvline(1.0, color="#d62728", linewidth=1.5)
-    axes[1, 2].set_xlabel("codebook AD ratio")
+    axes[1, 2].set_xlabel("codebook shell-deviance ratio")
     axes[1, 2].set_ylabel("log(1 + target usage)")
     axes[1, 2].set_title("Code geometry versus token usage")
     for ax in axes.ravel():
@@ -677,7 +700,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     codebook_summary, codebook_arrays = analyze_codebook(
         vae.quantize.embedding.weight,
         neighbors=int(args.neighbors),
+        bins=int(args.bins),
         alpha=float(args.alpha),
+        calibration_trials=int(args.calibration_trials),
+        seed=int(args.seed),
         device=device,
     )
 
@@ -791,7 +817,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "image_index": int(idx // tokens_per_image),
                     "position": int(idx % tokens_per_image),
                     "target_code": int(arrays["targets"][idx]),
-                    "code_ad_score": float(arrays["code_scores"][idx]),
+                    "code_shell_lrt_score": float(arrays["code_scores"][idx]),
                     "code_rejected": bool(arrays["code_rejected"][idx]),
                     "code_dimension": float(arrays["code_dimensions"][idx]),
                     "branch_ks": float(arrays["branch_ks"][idx]),
@@ -872,7 +898,9 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--generation-batch-size", type=int, default=4)
     parser.add_argument("--neighbors", type=int, default=128)
+    parser.add_argument("--bins", type=int, default=8)
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--calibration-trials", type=int, default=50000)
     parser.add_argument("--branch-top-k", type=int, default=32)
     parser.add_argument("--permutation-reps", type=int, default=3000)
     parser.add_argument("--cfg", type=float, default=4.0)

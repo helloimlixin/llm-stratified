@@ -13,13 +13,18 @@ class VarShellExperimentTests(unittest.TestCase):
         summary, arrays = analyze_codebook(
             codebook,
             neighbors=32,
+            bins=4,
             alpha=0.05,
+            calibration_trials=500,
+            seed=17,
             device=torch.device("cpu"),
         )
         self.assertEqual(summary["num_codes"], 256)
         self.assertEqual(summary["tested_inner_radii"], 31)
         self.assertEqual(arrays["scores"].shape, (256,))
         self.assertTrue(np.isfinite(arrays["scores"]).all())
+        self.assertEqual(arrays["shell_counts"].shape, (256, 4))
+        self.assertIn("shell_lrt_reject_fraction", summary)
 
     def test_group_comparison_respects_direction(self):
         values = np.asarray([3.0, 4.0, 0.0, 1.0], dtype=np.float64)

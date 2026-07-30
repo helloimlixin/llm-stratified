@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""VQ-VAE + GPT-style vision-generation radial-uniformity summaries.
+"""VQ-VAE + GPT-style vision-generation shell-deviance summaries.
 
 This script connects the local volume null to cached VQ generative-model
-artifacts. It runs an analytic log-radius exponentiality test on the LlamaGen VQ codebook
-neighborhoods, then joins those code-level p-values to ImageNet
-patch-token records from the matched VQ-tokenizer + GPT-style AR model.
+artifacts. It runs the fitted-dimension multinomial shell likelihood-ratio test
+on LlamaGen VQ codebook neighborhoods, then joins those code-level results to
+ImageNet patch-token records from the matched VQ-tokenizer + GPT-style model.
 """
 
 from __future__ import annotations
@@ -18,6 +18,19 @@ from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+try:
+    from radial_shell_statistics import (
+        calibrate_fitted_shell_deviance,
+        fitted_shell_test_from_distances,
+        monte_carlo_pvalue,
+    )
+except ImportError:  # Imported as scripts.vq_gpt_shell_visualizations.
+    from scripts.radial_shell_statistics import (
+        calibrate_fitted_shell_deviance,
+        fitted_shell_test_from_distances,
+        monte_carlo_pvalue,
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -64,39 +77,6 @@ def kl_to_uniform(counts: np.ndarray) -> float:
     with np.errstate(divide="ignore", invalid="ignore"):
         terms = np.where(q > 0.0, q * (np.log(q) + math.log(bins)), 0.0)
     return float(np.sum(terms))
-
-
-EXPONENTIAL_AD_CRITICALS = {
-    0.15: 0.922,
-    0.10: 1.078,
-    0.05: 1.341,
-    0.025: 1.606,
-    0.01: 1.957,
-}
-
-
-def exponential_ad_critical(samples: int, alpha: float = 0.05) -> float:
-    if int(samples) < 2:
-        return float("nan")
-    if float(alpha) not in EXPONENTIAL_AD_CRITICALS:
-        raise ValueError(f"alpha must be one of {sorted(EXPONENTIAL_AD_CRITICALS)}")
-    return float(EXPONENTIAL_AD_CRITICALS[float(alpha)] / (1.0 + 0.6 / int(samples)))
-
-
-def exponential_ad_statistic(distances: np.ndarray, radius: float) -> float:
-    values = np.asarray(distances, dtype=np.float64)
-    values = values[np.isfinite(values) & (values > 0.0) & (values < float(radius))]
-    if values.size < 2 or radius <= 0.0:
-        return float("nan")
-    log_radii = np.log(float(radius) / values)
-    scale = float(np.mean(log_radii))
-    if not math.isfinite(scale) or scale <= 0.0:
-        return float("nan")
-    standardized = np.sort(log_radii / scale)
-    cdf = np.clip(1.0 - np.exp(-standardized), 1e-12, 1.0 - 1e-12)
-    weights = 2.0 * np.arange(1, values.size + 1, dtype=np.float64) - 1.0
-    terms = weights * (np.log(cdf) + np.log1p(-cdf[::-1]))
-    return float(-values.size - np.sum(terms) / values.size)
 
 
 def read_json(path: Path) -> Any:
@@ -172,6 +152,7 @@ def codebook_shell_tests(
     neighbors: int,
     bins: int,
     alpha: float,
+    calibration_trials: int,
     permutation_reps: int,
     seed: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -185,25 +166,33 @@ def codebook_shell_tests(
     if int(neighbors) >= int(distances.shape[1]):
         raise ValueError("neighbors must leave room for the self-neighbor column")
 
+    tested = int(neighbors) - 1
+    critical, null_statistics = calibrate_fitted_shell_deviance(
+        samples=tested,
+        bins=int(bins),
+        alpha=float(alpha),
+        trials=int(calibration_trials),
+        seed=int(seed) + 700,
+    )
+
     rows: list[dict[str, Any]] = []
     for code_id in range(int(distances.shape[0])):
         local = distances[code_id, 1:int(neighbors) + 1]
         local = local[np.isfinite(local) & (local > 0.0)]
         if local.size != int(neighbors):
-            dim_hat = stat = score = critical = radius = float("nan")
+            dim_hat = stat = score = radius = pvalue = float("nan")
             counts = np.zeros(int(bins), dtype=np.int64)
         else:
             radius = float(local[-1])
             inner = local[:-1]
             dim_hat = fit_radial_dimension(inner, radius)
-            critical = exponential_ad_critical(inner.size, float(alpha))
             if math.isfinite(dim_hat) and dim_hat > 0.0:
-                counts = shell_counts(inner, equal_mass_edges(dim_hat, int(bins), radius))
-                stat = exponential_ad_statistic(inner, radius)
+                counts, stat = fitted_shell_test_from_distances(inner, radius=radius, bins=int(bins))
                 score = float(stat / critical) if math.isfinite(stat) and critical > 0.0 else float("nan")
+                pvalue = monte_carlo_pvalue(stat, null_statistics)
             else:
                 counts = np.zeros(int(bins), dtype=np.int64)
-                stat = score = float("nan")
+                stat = score = pvalue = float("nan")
         source = codebook_records[code_id]
         rows.append(
             {
@@ -211,10 +200,11 @@ def codebook_shell_tests(
                 "dimension_hat": float(dim_hat),
                 "radius": float(radius),
                 "shell_counts": counts.astype(int).tolist(),
-                "ad_statistic": float(stat),
-                "ad_critical": float(critical),
-                "ad_score": float(score),
-                "reject": bool(math.isfinite(score) and score > 1.0),
+                "shell_lrt_statistic": float(stat),
+                "shell_lrt_critical": float(critical),
+                "shell_lrt_score": float(score),
+                "shell_lrt_pvalue": float(pvalue),
+                "reject": bool(math.isfinite(pvalue) and pvalue <= float(alpha)),
                 "large_fiber_rejected": bool(source.get("large_fiber_rejected", False)),
                 "large_manifold_rejected": bool(source.get("large_manifold_rejected", False)),
                 "small_fiber_rejected": bool(source.get("small_fiber_rejected", False)),
@@ -225,11 +215,11 @@ def codebook_shell_tests(
             }
         )
 
-    ad_statistics = finite_array(rows, "ad_statistic")
-    ad_scores = finite_array(rows, "ad_score")
+    shell_statistics = finite_array(rows, "shell_lrt_statistic")
+    shell_scores = finite_array(rows, "shell_lrt_score")
     dims = finite_array(rows, "dimension_hat")
     reject = bool_array(rows, "reject")
-    shell_score = ad_scores
+    shell_score = shell_scores
     large_fiber = bool_array(rows, "large_fiber_rejected")
     large_manifold = bool_array(rows, "large_manifold_rejected")
     singular_any = bool_array(rows, "singular_any")
@@ -240,16 +230,23 @@ def codebook_shell_tests(
         "neighbors": int(neighbors),
         "bins": int(bins),
         "alpha": float(alpha),
-        "ad_critical": exponential_ad_critical(int(neighbors) - 1, float(alpha)),
-        "reject_count": int(reject.sum()),
-        "reject_fraction": float(reject.mean()),
+        "calibration_trials": int(calibration_trials),
+        "shell_lrt_critical": float(critical),
+        "shell_lrt_reject_count": int(reject.sum()),
+        "shell_lrt_reject_fraction": float(reject.mean()),
         "mean_dimension_hat": float(np.nanmean(dims)),
         "median_dimension_hat": float(np.nanmedian(dims)),
-        "ad_statistic_quantiles": {
-            "q50": float(np.nanquantile(ad_statistics, 0.50)),
-            "q90": float(np.nanquantile(ad_statistics, 0.90)),
-            "q95": float(np.nanquantile(ad_statistics, 0.95)),
-            "q99": float(np.nanquantile(ad_statistics, 0.99)),
+        "shell_lrt_statistic_quantiles": {
+            "q50": float(np.nanquantile(shell_statistics, 0.50)),
+            "q90": float(np.nanquantile(shell_statistics, 0.90)),
+            "q95": float(np.nanquantile(shell_statistics, 0.95)),
+            "q99": float(np.nanquantile(shell_statistics, 0.99)),
+        },
+        "shell_lrt_score_quantiles": {
+            "q50": float(np.nanquantile(shell_scores, 0.50)),
+            "q90": float(np.nanquantile(shell_scores, 0.90)),
+            "q95": float(np.nanquantile(shell_scores, 0.95)),
+            "q99": float(np.nanquantile(shell_scores, 0.99)),
         },
         "group_comparisons": {
             "large_fiber_shell_score": compare_groups(
@@ -305,7 +302,7 @@ def ar_join_summary(
         hit = by_code.get(code)
         if hit is None:
             continue
-        shell_score[idx] = safe_float(hit.get("ad_score"))
+        shell_score[idx] = safe_float(hit.get("shell_lrt_score"))
         shell_dim[idx] = safe_float(hit.get("dimension_hat"))
         shell_reject[idx] = bool(hit.get("reject", False))
     large_fiber = bool_array(records, "codebook_target_large_fiber")
@@ -437,14 +434,14 @@ def write_heatmap_gallery(
             gy, gx = divmod(patch, grid)
             code = int(item.get("target_code", -1))
             hit = by_code.get(code, {})
-            shell_values[gy, gx] = min(safe_float(hit.get("ad_score")), 6.0)
+            shell_values[gy, gx] = min(safe_float(hit.get("shell_lrt_score")), 6.0)
             entropy_values[gy, gx] = safe_float(item.get("local_ball_entropy"))
         entropy_min = float(np.nanmin(entropy_values)) if np.isfinite(entropy_values).any() else 0.0
         entropy_span = max(float(np.nanmax(entropy_values) - entropy_min), 1e-9) if np.isfinite(entropy_values).any() else 1.0
         entropy_norm = (entropy_values - entropy_min) / entropy_span
         panels = [
             ("input", image),
-            ("radial score", overlay_grid(image, shell_values, vmax=6.0)),
+            ("shell deviance", overlay_grid(image, shell_values, vmax=6.0)),
             ("AR entropy", overlay_grid(image, entropy_norm, vmax=1.0)),
         ]
         group_row = example_idx // examples_per_row
@@ -522,11 +519,11 @@ def write_dashboard(
     paired_stats_path: Path | None,
     pca_path: Path | None,
 ) -> str:
-    ad_scores = finite_array(codebook_records, "ad_score")
+    shell_scores = finite_array(codebook_records, "shell_lrt_score")
     dims = finite_array(codebook_records, "dimension_hat")
     reject = bool_array(codebook_records, "reject")
     large_fiber = bool_array(codebook_records, "large_fiber_rejected")
-    shell_score = ad_scores
+    shell_score = shell_scores
     width, height = 1500, 900
     margin = 34
     gap = 28
@@ -538,7 +535,7 @@ def write_dashboard(
     title_font = load_font(20)
     panel_font = load_font(15)
     small_font = load_font(11)
-    draw.text((margin, 14), "VQ-VAE + GPT-style radial-uniformity results", fill=(20, 20, 20), font=title_font)
+    draw.text((margin, 14), "VQ-VAE + GPT-style shell likelihood-ratio results", fill=(20, 20, 20), font=title_font)
 
     def panel_rect(row: int, col: int) -> tuple[int, int, int, int]:
         x0 = margin + col * (panel_w + gap)
@@ -623,17 +620,17 @@ def write_dashboard(
             py = y1 - int((ys[idx] - ymin) / yspan * (y1 - y0 - 1))
             r, g, b, _a = rgba_for_score(float(shell_score[idx]), 6.0)
             draw.rectangle((px, py, px + 1, py + 1), fill=(r, g, b))
-        draw.text((x0, y1 + 8), "color: AD statistic / 5% critical value", fill=(70, 70, 70), font=small_font)
+        draw.text((x0, y1 + 8), "color: shell deviance / 5% critical value", fill=(70, 70, 70), font=small_font)
 
-    draw_hist(frame(panel_rect(0, 0), "Codebook Anderson-Darling scores"), ad_scores, bins=50, color=(76, 120, 168), xlabel="AD statistic / 5% critical value", vline=1.0)
-    draw_pca(frame(panel_rect(0, 1), "VQ codebook PCA by radial score"))
+    draw_hist(frame(panel_rect(0, 0), "Codebook shell-deviance scores"), shell_scores, bins=50, color=(76, 120, 168), xlabel="deviance / 5% Monte Carlo critical value", vline=1.0)
+    draw_pca(frame(panel_rect(0, 1), "VQ codebook PCA by shell deviance"))
     rates = [
         float(np.mean(reject[large_fiber])) if large_fiber.any() else float("nan"),
         float(np.mean(reject[~large_fiber])) if (~large_fiber).any() else float("nan"),
         float(np.mean(reject)),
     ]
     draw_bars(
-        frame(panel_rect(0, 2), "Radial-null rejection rate"),
+        frame(panel_rect(0, 2), "Shell-test rejection rate"),
         ["large fiber", "rest", "all"],
         rates,
         colors=[(245, 133, 24), (158, 202, 233), (84, 162, 75)],
@@ -677,15 +674,15 @@ def write_report(path: Path, summary: dict[str, Any]) -> str:
     ar = summary["ar_join"]
     paired = summary.get("paired_branch_stats", {})
     lines = [
-        "# VQ-VAE + GPT Radial-Uniformity Results",
+        "# VQ-VAE + GPT Shell Likelihood-Ratio Results",
         "",
         f"- VQ codebook codes tested: `{codebook['num_codes']}`",
-        f"- Anderson-Darling rejection fraction: `{codebook['reject_fraction']:.4f}`",
+        f"- Shell likelihood-ratio rejection fraction: `{codebook['shell_lrt_reject_fraction']:.4f}`",
         f"- Mean/median fitted radial dimension: `{codebook['mean_dimension_hat']:.4f}` / `{codebook['median_dimension_hat']:.4f}`",
-        f"- Large-fiber code radial rejection rate: `{codebook['overlap']['large_fiber_shell_reject_rate']:.4f}`",
-        f"- Rest code radial rejection rate: `{codebook['overlap']['rest_shell_reject_rate']:.4f}`",
+        f"- Large-fiber code shell-test rejection rate: `{codebook['overlap']['large_fiber_shell_reject_rate']:.4f}`",
+        f"- Rest code shell-test rejection rate: `{codebook['overlap']['rest_shell_reject_rate']:.4f}`",
         f"- ImageNet AR positions joined: `{ar['num_positions']}` over `{ar['num_images']}` images",
-        f"- Target positions using radial-null-rejected VQ codes: `{ar['target_shell_reject_fraction']:.4f}`",
+        f"- Target positions using shell-test-rejected VQ codes: `{ar['target_shell_reject_fraction']:.4f}`",
     ]
     results = paired.get("results", [])
     for row in results:
@@ -706,6 +703,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         neighbors=int(args.neighbors),
         bins=int(args.bins),
         alpha=float(args.alpha),
+        calibration_trials=int(args.calibration_trials),
         permutation_reps=int(args.permutation_reps),
         seed=int(args.seed),
     )
@@ -802,6 +800,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbors", type=int, default=128)
     parser.add_argument("--bins", type=int, default=8)
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--calibration-trials", type=int, default=50000)
     parser.add_argument("--permutation-reps", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=20260722)
     parser.add_argument("--gallery-images", type=int, default=8)

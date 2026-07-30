@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from volume_shell_hypothesis_experiment import (  # noqa: E402
-    finite_sample_kl_threshold,
     kl_divergence,
     run_experiment,
     shell_edges_equal_null_mass,
@@ -33,12 +32,6 @@ class TestVolumeShellHypothesisExperiment(unittest.TestCase):
         self.assertAlmostEqual(float(kl_divergence(q_same, p)[0]), 0.0)
         self.assertGreater(float(kl_divergence(q_diff, p)[0]), 0.0)
 
-    def test_finite_sample_threshold_decreases_with_sample_size(self):
-        small = finite_sample_kl_threshold(samples=64, bins=8, alpha=0.05)
-        large = finite_sample_kl_threshold(samples=512, bins=8, alpha=0.05)
-
-        self.assertGreater(small, large)
-
     def test_smoke_run_includes_null_and_alternatives(self):
         payload = run_experiment(
             dimension=4.0,
@@ -53,9 +46,8 @@ class TestVolumeShellHypothesisExperiment(unittest.TestCase):
 
         self.assertEqual(len(payload["summary"]), 3)
         names = {row["scenario"] for row in payload["summary"]}
-        self.assertIn("null_d4", names)
-        self.assertIn("inner_heavy_d2", names)
-        self.assertIn("outer_heavy_d8", names)
+        self.assertEqual(names, {"null", "inner_heavy", "outer_heavy"})
+        self.assertTrue(all("critical_value" in row for row in payload["summary"]))
 
 
 if __name__ == "__main__":
