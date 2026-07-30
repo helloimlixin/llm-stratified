@@ -12,9 +12,9 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, Subset
 import torch.distributed as dist
+from PIL import Image, UnidentifiedImageError
 import torchvision
 import torchvision.transforms as T
-from PIL import Image, UnidentifiedImageError
 
 __all__ = [
     "Coco2017MultilabelDataset",

@@ -1,5 +1,7 @@
 import sys
 import json
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
@@ -29,6 +31,30 @@ class DummyDataset(Dataset):
 
 
 class TestDatasetHelpers(unittest.TestCase):
+    def test_training_import_order_loads_dataset_stack_in_fresh_process(self):
+        env = os.environ.copy()
+        src_path = str(ROOT / "src")
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, [src_path, env.get("PYTHONPATH", "")]))
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import torch; "
+                    "from training.loops import evaluate; "
+                    "import hydra; "
+                    "from omegaconf import OmegaConf; "
+                    "import datasets"
+                ),
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_indexed_dataset_nested_subset(self):
         base = DummyDataset()
         subset = Subset(base, [2, 5, 7])
