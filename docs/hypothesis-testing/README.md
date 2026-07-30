@@ -15,22 +15,16 @@ local radial volume growth.
 
 Under local intrinsic-volume uniformity,
 
-$$
-\Pr(\lVert X-t\rVert\le r\mid \lVert X-t\rVert\le r_*)=(r/r_*)^d.
-$$
+$\Pr(\lVert X-t\rVert \le r \mid \lVert X-t\rVert \le r_{\ast}) = (r/r_{\ast})^d.$
 
-The probability of shell `(r_{k-1}, r_k]` is therefore
+The probability of shell $(r_{k-1},r_k]$ is therefore
 
-$$
-p_k(d)=\frac{r_k^d-r_{k-1}^d}{r_*^d}.
-$$
+$p_k(d) = \frac{r_k^d-r_{k-1}^d}{r_{\ast}^d}.$
 
 The implementation fits the local dimension, constructs eight equal-null-mass
 shells, and uses the multinomial deviance
 
-$$
-T_N=2N D_{\mathrm{KL}}(\widehat Q\|P).
-$$
+$T_N = 2N D_{\mathrm{KL}}(\widehat{Q}\,\|\,P).$
 
 The complete fit-and-bin procedure is calibrated with 50,000 Monte Carlo null
 replicates. The synthetic experiment stays near the nominal 5% size and gains
