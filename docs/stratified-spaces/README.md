@@ -14,6 +14,8 @@ This folder contains the current paper workspace for the stratified vision repre
 - `patch_token_distance_appendix.tex`: raw-patch versus token-distance diagnostic appendix material.
 - `residual_sweep_appendix.tex`: sparse residual-threshold appendix material.
 - `../imgs/neurips_submission/`: lightweight representative gallery by default; full paper figures are generated/restored from run artifacts when needed.
+- `../hypothesis-testing/`: companion statistical note with the concentric-shell
+  derivation, ImageNet/LlamaGen/VAR experiments, and a checked-in readable PDF.
 
 ## Run Artifacts
 

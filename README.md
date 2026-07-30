@@ -2,7 +2,10 @@
 
 This repository studies **local stratified geometry in dense vision representations**. The active experiments are no-training probes over frozen patch-token spaces from modern vision backbones, especially DINOv3, SAM, SigLIP2, AIMv2, and VAR. The goal is not to train another classifier; it is to measure where local neighborhoods behave like one smooth chart and where volume growth, corrected slope increases, or raw-patch sparse complexity reveal heterogeneous structure.
 
-The current paper workspace lives in `docs/stratified-spaces/`. Full run ledgers and heavy visual artifacts live under `runs/` and W&B rather than inside `docs/`.
+The current paper workspace lives in `docs/stratified-spaces/`. The companion
+hypothesis-testing derivation and verified PDF live in
+`docs/hypothesis-testing/`. Full run ledgers and heavy visual artifacts live
+under `runs/` and W&B rather than inside `docs/`.
 
 ## Main Entry Points
 
@@ -47,7 +50,9 @@ Representative figures:
 - [Patch-token distance digest](docs/imgs/neurips_submission/coco_patch_token_distance_digest.png)
 - [VAR branch-sampling control](docs/imgs/neurips_submission/coco_var_generation_polysemy_branch_samples.png)
 
-See `docs/stratified-spaces/main.tex` and `docs/stratified-spaces/draft.tex` for the paper tables, captions, and visual audit.
+See `docs/stratified-spaces/main.tex` and `docs/stratified-spaces/draft.tex` for
+the submission paper, and `docs/hypothesis-testing/` for the radial test
+derivation, cross-tokenizer experiments, and current interpretation.
 
 ## Installation
 
