@@ -717,8 +717,9 @@ class VarAutoregressiveImageEncoder(nn.Module):
         """Return final-scale teacher-forced tokens plus VAR vocabulary logits.
 
         The fiber pipeline uses the hidden states as frozen patch-token features.
-        Generation-side diagnostics also need the actual next-token distribution,
-        so this method exposes the matching final-scale logits and VQ targets.
+        Generation-side diagnostics also need the actual next-scale VQ-code
+        distribution, so this method exposes the matching final-scale logits
+        and VQ targets.
         """
         idx_Bl = self.vae.img_to_idxBl(pixel_values, v_patch_nums=self.patch_nums)
         x_BLCv_wo_first_l = self.vae.quantize.idxBl_to_var_input(idx_Bl)

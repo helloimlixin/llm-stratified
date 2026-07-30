@@ -1,7 +1,7 @@
 """Generate local VAR branches at singular and control patch tokens.
 
 This is a causal-looking follow-up to ``var_generation_polysemy_probe.py``:
-instead of only correlating fiber singularity with next-token entropy, it
+instead of only correlating fiber singularity with next-scale code entropy, it
 intervenes on selected final-scale VQ codes, decodes the resulting images, and
 visualizes the local branches. A real singularity -> polysemy signal should show
 larger and more semantically diverse local branches for singular patches than
@@ -419,7 +419,7 @@ def _plot_branches(results: list[dict], *, out_path: Path, grid_size: int) -> No
     fig.text(
         0.02,
         0.012,
-        "Each row replaces one final-scale VQ code with likely alternative codes from VAR's next-token distribution, "
+        "Each row replaces one final-scale VQ code with likely alternatives from VAR's next-scale code distribution, "
         "then decodes the image. Higher visual spread in singular rows would support the singularity -> polysemy hypothesis.",
         fontsize=11,
         color="#333333",
@@ -478,7 +478,7 @@ def _plot_branch_aggregate(results: list[dict], *, out_path: Path) -> None:
         0.02,
         0.020,
         "Each line is one matched pair. Controls are non-violating tokens from the same image when possible, "
-        "chosen to have similar next-token entropy. Black dots mark group means.",
+        "chosen to have similar next-scale code entropy. Black dots mark group means.",
         fontsize=11,
         color="#333333",
     )

@@ -52,9 +52,6 @@
 \newtheorem{definition}{Definition}
 \newtheorem{theorem}{Theorem}
 
-\newcommand{\xl}[1]{{\color{blue} (XL: #1)}}
-\newcommand{\ads}[1]{{\color{magenta} (ADS: #1)}}
-
 % Avoid page-stretching warnings on float-heavy pages.
 \raggedbottom
 
@@ -68,19 +65,17 @@
 \maketitle
 
 \begin{abstract}
-We test whether dense vision representations are better described by locally stratified geometry than by one global manifold dimension. Building on the fiber-bundle volume-growth test of \citet{robinson2025token}, we analyze frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token clouds on \dataset{COCO}, with \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} stress tests and an auxiliary VAR-d30 generation probe. For each token cloud, we estimate local dimension, corrected slope-increase violations of the fiber-bundle null, same-image locality, and a raw-patch sparse reconstruction burden using OMP; because each token maps back to an image patch, all diagnostics can be inspected spatially. Across models and datasets, local dimension, violation rate, locality, and sparse complexity separate from one another. DINOv3 is highly image-local, SAM is especially sensitive on segmentation-like and out-of-domain structure, and SigLIP2/AIMv2 occupy higher-dimensional local regimes with different sparse-complexity profiles. The main conclusion is simple: modern dense vision spaces contain heterogeneous local structure that a single intrinsic-dimension estimate hides.
+We test whether dense vision representations are better described by locally stratified geometry than by one global manifold dimension. Building on the fiber-bundle volume-growth test of \citet{robinson2025token}, we analyze frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token clouds on \dataset{COCO}, with \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} stress tests and auxiliary autoregressive generation probes. For each token cloud, we estimate local dimension, corrected slope-increase violations of the fiber-bundle null, same-image locality, and a raw-patch sparse reconstruction burden using OMP; because each token maps back to an image patch, all diagnostics can be inspected spatially. Across models and datasets, local dimension, violation rate, locality, and sparse complexity separate from one another. DINOv3 is highly image-local, SAM is especially sensitive on segmentation-like and out-of-domain structure, and SigLIP2/AIMv2 occupy higher-dimensional local regimes with different sparse-complexity profiles. A follow-up pretrained VQ-AR probe on \dataset{ImageNet}-val uses dense patch interventions to show that a branch-flat subset of large-fiber singular VQ targets has higher local branch diversity, while fixed-order singular targets are neutral. The main conclusion is simple: modern dense vision spaces contain heterogeneous local structure that a single intrinsic-dimension estimate hides.
 \end{abstract}
 
 \section{Introduction}
-The \emph{manifold hypothesis} says that high-dimensional data concentrate near a much lower-dimensional set. It is a useful organizing idea, but modern representation spaces often need a more local description. One global intrinsic-dimension estimate can hide neighborhoods whose scaling behavior, effective dimension, or visual content changes from point to point \citep{loaiza-ganem2024deep,levina2005maximum,facco2017estimating,pope2021intrinsic,tempczyk2022lidl,tempczyk2026benchmarks}. \ads{need more recent cites if we can find them, from 2025-2026}
+The \emph{manifold hypothesis} says that high-dimensional data concentrate near a much lower-dimensional set. It is a useful organizing idea, but modern representation spaces often need a more local description. One global intrinsic-dimension estimate can hide neighborhoods whose scaling behavior, effective dimension, or visual content changes from point to point \citep{loaiza-ganem2024deep,levina2005maximum,facco2017estimating,pope2021intrinsic,tempczyk2022lidl,tempczyk2026benchmarks}.
 
 Recent work on language-token embeddings sharpens this local view: compare each token's log-volume/log-radius curve with a permissive fiber-bundle null, and flag statistically significant slope increases as violations of that null \citep{robinson2025token}. The point is not merely that tokens are discrete. It is that learned neighborhoods can fail even a smooth local model. This paper asks the analogous question for dense vision representations.
 
-\ads{Need a paragraph about formal testing of manifold hypothesis and main idea.}
-
 We therefore treat the manifold hypothesis as a local statistical null rather than as a global slogan. Around each anchor, a regular local model predicts that empirical ball volume should grow like a stable power law in radius, with only the allowed flattening captured by the fiber-bundle formulation. The test asks a directional question: after multiple-testing correction, does a later radius window grow faster than an earlier one? A positive answer marks a local failure of the tested regular model, not a claim that the entire representation is non-manifold.
 
-Vision gives a cleaner observational handle than a vocabulary table. A transformer or segmentation encoder produces hundreds of patch tokens per image, and each token remains tied to a visible region: an object interior, boundary, texture, occlusion, or background transition. \ads{need to explain here why we can more densely sample the local space around token patches.} This makes the sampling denser: one image supplies a complete grid of nearby anchors that share scene context while varying in local visual content, so a small aligned image set yields thousands of spatially interpretable local neighborhoods. We can therefore estimate local geometry in feature space and project the result back to the image. That spatial link lets us ask not only whether a representation is locally regular, but where the irregularities occur and whether the corresponding raw patches are visually simple or complex.
+Vision gives a cleaner observational handle than a vocabulary table. A transformer or segmentation encoder produces hundreds of patch tokens per image, and each token remains tied to a visible region: an object interior, boundary, texture, occlusion, or background transition. This makes the sampling denser: one image supplies a complete grid of nearby anchors that share scene context while varying in local visual content, so a small aligned image set yields thousands of spatially interpretable local neighborhoods. In autoregressive VQ image models, the same density also gives many local branch interventions: each patch-level target can be replaced by several likely VQ codes and decoded back to pixels. We can therefore estimate local geometry in feature space, test generation-side branching, and project both results back to the image. That spatial link lets us ask not only whether a representation is locally regular, but where the irregularities occur and whether the corresponding raw patches are visually simple, complex, or ambiguous under generation.
 
 We study frozen DINOv3, SAM, SigLIP2, and AIMv2 checkpoints on image-aligned \dataset{COCO} subsets \citep{simeoni2025dinov3,kirillov2023segment,tschannen2025siglip2,elnouby2024aimv2,lin2014microsoft}. We add \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} as domain shifts, and include VAR-d30 as an auxiliary autoregressive vision-token probe \citep{tian2024visual}. The claim is deliberately local and diagnostic: dense vision representations are not well summarized by one global dimension number. Their patch-token geometry is better treated as stratified, with local scaling and reconstruction complexity varying across image regions, models, and datasets.
 
@@ -89,6 +84,7 @@ We study frozen DINOv3, SAM, SigLIP2, and AIMv2 checkpoints on image-aligned \da
 \item We adapt the fiber-bundle volume-growth test of \citet{robinson2025token} to dense vision patch-token clouds.
 \item We evaluate frozen DINOv3, SAM, SigLIP2, AIMv2, and VAR-d30 spaces on \dataset{COCO}, with stress tests on \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}.
 \item We project local dimension, corrected slope-increase violations, same-image locality, and sparse raw-patch reconstruction burden back to image patches.
+\item We use a codebook-first VQ-AR probe to test a visual analogue of token polysemy: branch-flat large-fiber singular VQ targets show higher decoded branch diversity, but fixed-order singular targets do not.
 \item We show that these diagnostics separate: global dimension is a poor summary, and patch-projected geometry exposes model- and region-specific stratification.
 \end{itemize}
 
@@ -119,6 +115,54 @@ The dimension estimate comes from the standard small-ball volume expansion used 
   \vol(B_r(z_i)) = C_i r^d + O(r^{d+1}),
 \end{equation}
 and the empirical count $\widehat{V}_i(r)$ approximates that local volume. Taking logs gives $\log \widehat{V}_i(r) \approx c_i + d\log r$, so the slope of a log-volume/log-radius curve estimates local dimension. In practice we do not choose radii directly. The pair $(\log r_k(i), \log k)$ traces the empirical volume curve around token $i$.
+
+\paragraph{Shell-count hypothesis test.}
+The same volume law can also be written as a direct goodness-of-fit test. Fix
+an anchor $z_i$, an outer radius $r$, and condition on retained neighbors
+inside $B_r(z_i)$. If the local $d$-dimensional volume null holds, then for a
+random retained token $X$,
+\begin{equation}
+  \Pr\{\|X-z_i\|_2\le s \mid \|X-z_i\|_2\le r\}
+  =
+  \left(\frac{s}{r}\right)^d,\qquad 0\le s\le r .
+\end{equation}
+Choose radial shells
+\[
+  A_k=\{x:r_{k-1}\le \|x-z_i\|_2<r_k\},\qquad
+  0=r_0<r_1<\cdots<r_K=r .
+\]
+Under the null, shell $k$ has probability
+\begin{equation}
+  p_k(d)=\Pr\{X\in A_k\}
+  =
+  \frac{r_k^d-r_{k-1}^d}{r^d}.
+\end{equation}
+Now take $N$ retained neighbors $X_1,\ldots,X_N$ sampled from the same
+conditional local law. The shell labels $Y_j=k$ iff $X_j\in A_k$ are iid
+categorical variables with probabilities $p_1(d),\ldots,p_K(d)$. Therefore the
+count vector
+\[
+  C_k=\sum_{j=1}^N \mathbf{1}\{Y_j=k\}
+\]
+is multinomial:
+\begin{equation}
+  \Pr\{C_1=c_1,\ldots,C_K=c_K\}
+  =
+  \frac{N!}{\prod_{k=1}^K c_k!}
+  \prod_{k=1}^K p_k(d)^{c_k},
+  \qquad \sum_{k=1}^K c_k=N.
+\end{equation}
+Intuitively, after conditioning on the local ball, each retained token is one
+independent throw into exactly one radial bin. The disjoint shell partition
+turns the radial-volume prediction into a categorical experiment. The
+likelihood-ratio statistic is therefore
+\[
+  2N D_{\mathrm{KL}}(Q\|P_d),
+\]
+where $Q=(C_1/N,\ldots,C_K/N)$ and $P_d=(p_1(d),\ldots,p_K(d))$. When the local
+dimension or the shell boundaries are fitted from the same neighbors, we
+calibrate this statistic by repeating the same fitting and binning steps in a
+parametric bootstrap.
 
 \begin{definition}[Local dimension estimate]
 Given neighborhood indices $k\in[k_{\min},k_{\max}]$, the local dimension estimate at $z_i$ is the slope
@@ -570,6 +614,52 @@ High vs. low dimension decile & -0.091 & $<10^{-4}$ & -0.873 & $<10^{-4}$ \\
 
 The VAR plots are therefore a negative control for a too-simple singularity-to-polysemy story. Dimension, irregularity, and generation uncertainty do not light up in the same places: dimension is broadly high and predictive of uncertainty, irregularity is sparse, and fiber violations alone do not robustly predict local generation ambiguity.
 
+We also run a codebook-first VQ-AR check on \dataset{ImageNet}-val using a released class-conditional VQ tokenizer and autoregressive transformer pair. This probe is closer to the language-token setting because singularity is defined on the discrete VQ codebook embedding table, then tested downstream in the next-patch distribution. Vision makes this test denser than language: each image contributes a patch lattice, each target patch exposes top-ranked VQ branch alternatives, and each intervention can be decoded back to a local image crop.
+
+The branch-diversity metric is the mean pairwise pixel-space L2 distance among decoded local crops after replacing a target patch by top branch codes. We compare same-image singular and regular anchors. The flatness-ranked condition selects large-fiber singular targets that also have locally flat downstream AR branch statistics; the fixed-order guardrail uses the first eligible codebook-singular anchors without ranking by AR flatness.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\caption{Pretrained VQ-AR branch-polysemy checks on \dataset{ImageNet}-val. $\Delta$ is singular minus matched regular mean pairwise crop diversity. Confidence intervals are bootstrap 95\% intervals over matched pairs. $p_{\mathrm{sign}}$ is the one-sided exact sign test and $p_{\mathrm{flip}}$ is a paired sign-flip test.}
+\begin{tabular}{@{}p{0.31\linewidth}ccp{0.24\linewidth}cc@{}}
+\toprule
+Selection & Pairs & Branches & $\Delta$ crop L2 (95\% CI) & Wins & $p_{\mathrm{sign}}/p_{\mathrm{flip}}$ \\
+\midrule
+Flatness-ranked large-fiber singular & 32 & 8 & $+0.00452$ [$0.00231$, $0.00744$] & 23/32 & 0.010 / 0.00004 \\
+Fixed-order large-fiber singular & 32 & 8 & $+0.00016$ [$-0.00089$, $0.00112$] & 17/32 & 0.430 / 0.383 \\
+Suffix rollout, flatness-ranked & 6 & 4 & $+0.02440$ [$0.00234$, $0.05745$] & 5/6 & 0.109 / 0.092 \\
+\bottomrule
+\end{tabular}
+\label{tab:vq-ar-polysemy}
+\end{table}
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/vq_ar_polysemy_branch_paired_stats}
+\caption{Paired inference for the VQ-AR branch-polysemy probe. The flatness-ranked large-fiber singular anchors show a positive singular-minus-regular branch-diversity effect, while the fixed-order guardrail is centered near zero. This is the key control for the refined claim: the branch-flat subset matters, not the singular label alone.}
+\label{fig:vq-ar-paired-stats}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/vq_ar_polysemy_branch_diversity_summary}
+\caption{Dense replacement sweep over 32 matched \dataset{ImageNet}-val pairs and eight branch codes per anchor. Each target patch is replaced by likely VQ alternatives and decoded back to pixels; branch diversity is measured on the resulting local crops. The visual summary shows that the positive effect is paired and local rather than a single cherry-picked sample.}
+\label{fig:vq-ar-diversity-summary}
+\end{figure}
+\clearpage
+
+\begin{figure}[p]
+\centering
+\widepaperfig{\figroot/vq_ar_polysemy_branch_rollout_gallery}
+\caption{Qualitative suffix rollouts for flatness-ranked large-fiber singular anchors and matched regular controls. The marked target patch is the intervention point; the following decoded branches illustrate how a locally flat singular target can open multiple plausible visual continuations. This panel is illustrative, and the paired statistics in \Cref{tab:vq-ar-polysemy,fig:vq-ar-paired-stats} carry the quantitative claim.}
+\label{fig:vq-ar-rollout-gallery}
+\end{figure}
+\clearpage
+
+\Cref{tab:vq-ar-polysemy,fig:vq-ar-paired-stats,fig:vq-ar-diversity-summary,fig:vq-ar-rollout-gallery} refine the generation-side claim. Codebook singularity alone is not a universal polysemy switch: the fixed-order guardrail is neutral. The supported statement is narrower and more useful: within the large-fiber singular VQ set, the locally branch-flat subset has statistically supported visual branch diversity, and suffix rollout amplifies the effect in the small qualitative sample. This matches the language intuition only in an existential sense: singular regions can contain nearly uniform branch neighborhoods, but the singular label by itself is not sufficient.
+
 \begin{figure}[p]
 \centering
 \widepaperfig{\figroot/coco_var_d30_fiber_dimension_heatmap}
@@ -653,15 +743,15 @@ The VAR plots are therefore a negative control for a too-simple singularity-to-p
 \section{Discussion}
 Dense vision representations let us test stratified geometry at patch resolution. Each token is both a point in representation space and a visible region in an image, which lets us separate facts that a global intrinsic-dimension estimate would collapse.
 
-The core pattern is stable. DINOv3 and SAM have similar median local dimension on \dataset{COCO}, but differ in same-image locality and slope-change structure. SigLIP2 and AIMv2 move the comparison into a higher-dimensional regime while preserving strong locality. Cross-dataset probes show that the diagnostic changes with visual domain: \dataset{DTD} is sparse-simple for several encoders but not SAM, while \dataset{EuroSAT} makes SAM's corrected fiber violations and sparse burden stand out. A generic change point is not the same as a fiber violation, and sparse raw-patch reconstruction is not the same as local dimension. The VAR-d30 probe adds a useful caution: generation uncertainty aligns more with broad local dimension than with corrected fiber violations.
+The core pattern is stable. DINOv3 and SAM have similar median local dimension on \dataset{COCO}, but differ in same-image locality and slope-change structure. SigLIP2 and AIMv2 move the comparison into a higher-dimensional regime while preserving strong locality. Cross-dataset probes show that the diagnostic changes with visual domain: \dataset{DTD} is sparse-simple for several encoders but not SAM, while \dataset{EuroSAT} makes SAM's corrected fiber violations and sparse burden stand out. A generic change point is not the same as a fiber violation, and sparse raw-patch reconstruction is not the same as local dimension. The generation probes add a useful caution: VAR-d30 generation uncertainty aligns more with broad local dimension than with corrected fiber violations, and the VQ-AR branch result appears only after selecting the branch-flat subset of large-fiber singular targets. Singularity is therefore a local geometry condition that can expose polysemous neighborhoods, not a guarantee that every singular visual token will branch semantically.
 
-The restrained claim is enough: modern pretrained vision checkpoints exhibit heterogeneous local geometry, so a single global dimension estimate is a poor summary. This is a diagnostic case study of stratified structure in dense vision spaces, not a final benchmark over all vision models or domains.
+The restrained claim is enough: modern pretrained vision checkpoints exhibit heterogeneous local geometry, so a single global dimension estimate is a poor summary. The dense patch lattice gives vision an advantage over language for testing this claim: we can repeat local interventions over many spatial anchors, decode them, and keep negative controls such as the fixed-order VQ-AR guardrail. This is a diagnostic case study of stratified structure in dense vision spaces, not a final benchmark over all vision models or domains.
 
 \section{Limitations}
-The study is intentionally small. The main comparison uses 16 image-aligned \dataset{COCO} images and a limited set of large pretrained checkpoints; the \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} runs are stress tests, not benchmark-scale studies; and VAR-d30 is auxiliary rather than a matched encoder baseline. The local dimension estimator depends on neighborhood range, distance metric, smoothing, and multiple-testing correction. The sparse dictionary probe depends on dictionary size, sparsity cap, and residual threshold. SAM masks provide useful context on \dataset{COCO}, but the fiber statistics are computed from encoder tokens rather than mask quality; outside detection datasets, SAM should be read only as a frozen encoder. A stronger version should scale the image count, compare more checkpoints and datasets, calibrate the change-point test with stronger null controls, and compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}.
+The study is intentionally small. The main comparison uses 16 image-aligned \dataset{COCO} images and a limited set of large pretrained checkpoints; the \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT} runs are stress tests, not benchmark-scale studies; and VAR-d30 is auxiliary rather than a matched encoder baseline. The VQ-AR polysemy check uses one pretrained VQ tokenizer/AR transformer pair and a CPU-scale \dataset{ImageNet}-val subset, so it should be read as evidence for a branch-flat subset rather than as a universal claim about all singular visual tokens. The local dimension estimator depends on neighborhood range, distance metric, smoothing, and multiple-testing correction. The sparse dictionary probe depends on dictionary size, sparsity cap, and residual threshold. SAM masks provide useful context on \dataset{COCO}, but the fiber statistics are computed from encoder tokens rather than mask quality; outside detection datasets, SAM should be read only as a frozen encoder. A stronger version should scale the image count, compare more checkpoints and datasets, calibrate the change-point test with stronger null controls, compare against alternative intrinsic-dimension estimators \citep{facco2017estimating}, and rerun the VQ-AR branch tests across larger generative checkpoints.
 
 \section{Conclusion}
-Vision is a dense, spatially grounded medium for the stratified-manifold question raised by language-token embeddings. Across \dataset{COCO}, \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}, frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token spaces are not well summarized by one global intrinsic dimension. The useful story is local: dimension estimates, fiber-violation maps, sparse-complexity heatmaps, patch--token distance diagnostics, and SAM mask previews together reveal stratified structure that a single number would hide.
+Vision is a dense, spatially grounded medium for the stratified-manifold question raised by language-token embeddings. Across \dataset{COCO}, \dataset{STL10}, \dataset{DTD}, and \dataset{EuroSAT}, frozen DINOv3, SAM, SigLIP2, and AIMv2 patch-token spaces are not well summarized by one global intrinsic dimension. The useful story is local: dimension estimates, fiber-violation maps, sparse-complexity heatmaps, patch--token distance diagnostics, and SAM mask previews together reveal stratified structure that a single number would hide. In the generative setting, the same density supports a more precise polysemy claim: branch-flat large-fiber singular VQ targets can produce more diverse local visual continuations, while unranked singular targets need not.
 
 \begin{ack}
 Acknowledgments are omitted for anonymous review.
@@ -974,6 +1064,7 @@ This appendix gives the complete visual output for the high-capacity fixed-$k=12
 \item The SigLIP2-B/AIMv2-L high-capacity residual-threshold sparse-coding sweep comes from \url{runs/local/sparse_residual_sweep/20260509_vision_expansion}.
 \item The SAM ViT-Huge patch-size sensitivity table comes from \url{runs/local/coco_sam_patch_size_sweep/20260508}.
 \item The auxiliary \dataset{COCO} VAR-d30 geometry and generation-branching figures are vendored from \url{runs/local/coco_var_d30_sparse_fiber/20260509_194508}; the W\&B run ID is \texttt{3zmdg9wf}. The earlier generation-diagnostic run \texttt{skt3dcv6} remains referenced for continuity.
+\item The pretrained VQ-AR \dataset{ImageNet}-val codebook and branch-flatness probes are generated by \url{scripts/pretrained_vq_codebook_stratification_probe.py}, \url{scripts/pretrained_vq_ar_ks_probe.py}, \url{scripts/vq_ar_polysemy_branch_gallery.py}, and \url{scripts/vq_ar_polysemy_branch_stats.py}. The dense flatness-ranked branch gallery is saved under \url{runs/local/pretrained_vq_ar_polysemy_branch_gallery/llamagen_c2i_B_256_imagenet_val64_large_fiber_replacement_pairs32_dense}; the fixed-order guardrail is saved under \url{runs/local/pretrained_vq_ar_polysemy_branch_gallery/llamagen_c2i_B_256_imagenet_val64_large_fiber_replacement_pairs32_position}; paired inference outputs are saved under \url{runs/local/pretrained_vq_ar_polysemy_branch_gallery/paired_inference_position_guardrail}.
 \item The DINOv3 ViT-L/16 comparison row comes from \url{runs/local/coco_pretrained_vit_sparse_fiber/20260509_193911}; the W\&B run ID is \texttt{dzwnvdkk}.
 \item The cross-dataset summary table is saved at \url{runs/local/cross_dataset_logs/cross_dataset_summary_20260511.csv}. The \dataset{STL10} runs are DINOv3-H+ \url{runs/local/stl10_dinov3_huge_sparse_fiber/20260511_102511} (W\&B \texttt{cw9js1pg}), SAM-H \url{runs/local/stl10_sam_huge_sparse_fiber/20260511_102912} (W\&B \texttt{3br3f0da}), SigLIP2-B \url{runs/local/stl10_siglip2_base_sparse_fiber/20260511_101846} (W\&B \texttt{9fld8bxk}), and AIMv2-L \url{runs/local/stl10_aimv2_large_sparse_fiber/20260511_103310} (W\&B \texttt{xf12rlif}).
 \item The \dataset{DTD} cross-dataset runs are DINOv3-H+ \url{runs/local/dtd_dinov3_huge_sparse_fiber/20260511_103803} (W\&B \texttt{2z0r30qt}), SAM-H \url{runs/local/dtd_sam_huge_sparse_fiber/20260511_104159} (W\&B \texttt{afs0rz4h}), SigLIP2-B \url{runs/local/dtd_siglip2_base_sparse_fiber/20260511_104554} (W\&B \texttt{1dxplxyq}), and AIMv2-L \url{runs/local/dtd_aimv2_large_sparse_fiber/20260511_104951} (W\&B \texttt{6q5z8po8}).

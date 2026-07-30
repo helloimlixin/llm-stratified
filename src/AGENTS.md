@@ -37,7 +37,7 @@
 
 ## Documentation Guidelines
 
-- Current result documentation should point to `docs/RESULTS.md`, `docs/COCO_PRETRAINED_VIT_SAM_ANALYSIS.md`, and `docs/stratified-spaces/main.tex`.
+- Current result documentation should point to `docs/stratified-spaces/main.tex`, `docs/stratified-spaces/draft.tex`, W&B, and compact run summaries under `runs/`.
 - When adding paper-facing figures, copy stable assets into `docs/imgs/neurips_submission/` and record run provenance.
 - Do not revive superseded scratch-backbone trial reports in the active docs; keep the narrative focused on frozen, image-aligned vision representation probes.
 

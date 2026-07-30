@@ -3,13 +3,14 @@
 This script reuses an existing VAR fiber run and computes generation-side
 statistics for the same image-aligned final-scale patch tokens:
 
-* entropy of VAR's teacher-forced next-VQ-token distribution
+* entropy of VAR's teacher-forced next-scale VQ-code distribution
 * negative log likelihood of the observed VQ token
 * top-1 probability and top-2 margin
 
 Those quantities are compared with fiber dimension and fiber-violation
 irregularity. High entropy is the direct autoregressive analogue of local
-polysemy: the model has several plausible visual continuations at that patch.
+polysemy: the model has several plausible fine-scale code continuations at that
+patch under the coarser-scale context.
 """
 
 from __future__ import annotations
@@ -422,7 +423,7 @@ def _plot_patch_gallery(
     fig.text(
         0.02,
         0.012,
-        "I is fiber-violation irregularity; H is normalized VAR next-token entropy. "
+        "I is fiber-violation irregularity; H is normalized VAR next-scale code entropy. "
         "The first rows are the patches most aligned with the singularity -> polysemy hypothesis.",
         fontsize=11,
         color="#333333",
@@ -890,7 +891,7 @@ def main() -> None:
         maps=entropy_maps,
         out_path=entropy_path,
         title="VAR Generation Ambiguity Projected Back to Image Patches",
-        colorbar_label="normalized next-token entropy",
+        colorbar_label="normalized next-scale code entropy",
         cmap="magma",
         footer="Brighter patches are locations where VAR assigns mass to more possible VQ tokens under teacher forcing.",
         max_images=num_images,
